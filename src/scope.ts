@@ -75,11 +75,36 @@ export function isDirectory(target: string): boolean {
 
 /** Names of the immediate subdirectories of `dir`, sorted; `[]` when missing. */
 export function listSubdirectories(dir: string): string[] {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      names.push(entry.name);
+    } else if (entry.isSymbolicLink()) {
+      // A symlink is only a skill if it resolves to a directory. A dangling or
+      // file-valued link would otherwise become a broken link in every harness.
+      try {
+        if (statSync(path.join(dir, entry.name)).isDirectory()) names.push(entry.name);
+      } catch {
+        /* broken symlink: reported by doctor, never linked */
+      }
+    }
+  }
+  return names.sort();
+}
+
+/** Names of dot-directories, which the convention reserves and skips. */
+export function listHiddenSubdirectories(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .filter((entry) => entry.name.startsWith(".") && (entry.isDirectory() || entry.isSymbolicLink()))
       .map((entry) => entry.name)
-      .filter((name) => !name.startsWith("."))
       .sort();
   } catch {
     return [];

@@ -88,23 +88,47 @@ test("upsertClause does not duplicate the block across many runs", () => {
 
 test("gitignore block is insert, replace and remove stable", () => {
   const base = "node_modules/\n*.log\n";
-  const withBlock = applyIgnoreBlock(base, [".claude/skills/"]);
-  assert.ok(withBlock.includes("# agentlink:begin"));
-  assert.ok(withBlock.endsWith("# agentlink:end\n"));
-  assert.ok(withBlock.startsWith("node_modules/\n*.log\n"), "user rules stay first");
+  const added = applyIgnoreBlock(base, [".claude/skills/"]);
+  assert.equal(added.status, "updated");
+  assert.ok(added.text.includes("# agentlink:begin"));
+  assert.ok(added.text.endsWith("# agentlink:end\n"));
+  assert.ok(added.text.startsWith("node_modules/\n*.log\n"), "user rules stay first");
 
-  const replaced = applyIgnoreBlock(withBlock, [".cursor/skills/"]);
-  assert.ok(!replaced.includes(".claude/skills/"));
-  assert.equal(replaced, applyIgnoreBlock(replaced, [".cursor/skills/"]), "idempotent");
+  const replaced = applyIgnoreBlock(added.text, [".cursor/skills/"]);
+  assert.ok(!replaced.text.includes(".claude/skills/"));
+  assert.equal(applyIgnoreBlock(replaced.text, [".cursor/skills/"]).status, "unchanged", "idempotent");
 
-  const removed = applyIgnoreBlock(replaced, []);
-  assert.equal(removed, base);
+  const removed = applyIgnoreBlock(replaced.text, []);
+  assert.equal(removed.status, "updated");
+  assert.equal(removed.text, base, "removal restores the file exactly");
 });
 
 test("gitignore block handles a file with no trailing newline", () => {
-  const withBlock = applyIgnoreBlock("node_modules/", [".claude/skills/"]);
-  assert.equal(withBlock, "node_modules/\n\n# agentlink:begin\n.claude/skills/\n# agentlink:end\n");
-  assert.equal(applyIgnoreBlock(withBlock, []), "node_modules/\n");
+  const added = applyIgnoreBlock("node_modules/", [".claude/skills/"]);
+  assert.equal(added.text, "node_modules/\n\n# agentlink:begin\n.claude/skills/\n# agentlink:end\n");
+  assert.equal(applyIgnoreBlock(added.text, []).text, "node_modules/\n");
+});
+
+test("gitignore editing leaves blank lines elsewhere alone", () => {
+  const base = "a/\n\n\n\nb/\n\n\nc/\n";
+  const added = applyIgnoreBlock(base, ["x/"]);
+  assert.ok(added.text.startsWith(base), "the user's spacing is byte-identical");
+  assert.equal(applyIgnoreBlock(added.text, []).text, base);
+});
+
+test("an unterminated or stray marker is refused, never guessed at", () => {
+  const lone = "# agentlink:begin\n.claude/skills/\nmy-own-rule/\n";
+  const result = applyIgnoreBlock(lone, [".cursor/skills/"]);
+  assert.equal(result.status, "malformed");
+  assert.equal(result.text, lone, "the file is returned untouched");
+
+  const strayEnd = "my-own-rule/\n# agentlink:end\n";
+  assert.equal(applyIgnoreBlock(strayEnd, ["x/"]).text, strayEnd);
+
+  const similar = "# agentlink:beginning of my notes\nkeep-me/\n";
+  const added = applyIgnoreBlock(similar, ["x/"]);
+  assert.ok(added.text.startsWith(similar), "a lookalike comment is not the marker");
+  assert.equal(applyIgnoreBlock(added.text, ["x/"]) && added.status, "updated");
 });
 
 test("hashTree ignores line ending differences but not content", () => {

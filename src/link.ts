@@ -4,6 +4,8 @@ import {
   mkdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
+  renameSync,
   rmdirSync,
   symlinkSync,
   unlinkSync,
@@ -42,7 +44,22 @@ export interface Plan {
   native: { harnessId: string; kind: LinkKind }[];
   /** Harnesses whose path for this scope has no documented answer. */
   unknown: { harnessId: string; kind: LinkKind }[];
+  /**
+   * Harness directories that are themselves symlinks to the canonical tree.
+   * Already correct, so no links are planned, but still derived paths that
+   * belong in .gitignore.
+   */
+  aliases: { rel: string; harnessId: string }[];
   skillsFound: string[];
+}
+
+/** True when `dir` resolves to the same place as the canonical skills tree. */
+function resolvesToCanonicalSkills(paths: ScopePaths, dir: string): boolean {
+  try {
+    return realpathSync(dir) === realpathSync(paths.skills);
+  } catch {
+    return false;
+  }
 }
 
 /** Build the full set of links for a scope without touching the filesystem. */
@@ -51,6 +68,7 @@ export function plan(paths: ScopePaths, harnesses: Harness[]): Plan {
   const skips: SkipOp[] = [];
   const native: Plan["native"] = [];
   const unknown: Plan["unknown"] = [];
+  const aliases: Plan["aliases"] = [];
 
   const add = (op: Omit<LinkOp, "harnessIds">, harnessId: string) => {
     const existing = ops.get(op.target);
@@ -108,6 +126,10 @@ export function plan(paths: ScopePaths, harnesses: Harness[]): Plan {
       native.push({ harnessId: harness.id, kind: "skill" });
     } else if (!skillsAlias) {
       unknown.push({ harnessId: harness.id, kind: "skill" });
+    } else if (resolvesToCanonicalSkills(paths, path.join(paths.root, skillsAlias))) {
+      // The harness directory is a symlink to .agents/skills, which is already
+      // the arrangement this tool exists to create.
+      aliases.push({ rel: skillsAlias, harnessId: harness.id });
     } else if (skills.length === 0) {
       skip(
         {
@@ -134,7 +156,7 @@ export function plan(paths: ScopePaths, harnesses: Harness[]): Plan {
     }
   }
 
-  return { ops: [...ops.values()], skips, native, unknown, skillsFound: skills };
+  return { ops: [...ops.values()], skips, native, unknown, aliases, skillsFound: skills };
 }
 
 export type LinkState = "linked" | "relinked" | "unchanged" | "skipped";
@@ -145,12 +167,28 @@ export interface ApplyResult {
   detail?: string;
 }
 
+/**
+ * Apply a plan. Each op is isolated: one failure is reported as skipped rather
+ * than aborting the batch, so links created earlier stay recorded in state and
+ * remain removable by `unlink`.
+ */
 export function apply(paths: ScopePaths, plan: Plan, options: { dryRun?: boolean } = {}): ApplyResult[] {
-  return plan.ops.map((op) => createLink(paths, op, options));
+  return plan.ops.map((op) => {
+    try {
+      return createLink(paths, op, options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { op, state: "skipped" as const, detail: `could not link: ${message}` };
+    }
+  });
 }
 
 function createLink(paths: ScopePaths, op: LinkOp, options: { dryRun?: boolean }): ApplyResult {
   const existing = inspect(op.target);
+
+  if (existing.kind === "error") {
+    return { op, state: "skipped", detail: `cannot inspect: ${existing.detail}` };
+  }
 
   if (existing.kind === "missing") {
     if (!options.dryRun) {
@@ -172,19 +210,23 @@ function createLink(paths: ScopePaths, op: LinkOp, options: { dryRun?: boolean }
     return { op, state: "skipped", detail: `already a symlink to ${existing.resolved}` };
   }
 
-  return {
-    op,
-    state: "skipped",
-    detail:
-      existing.kind === "dir"
-        ? "a real directory sits here — move its contents into .agents/skills and re-run"
-        : "a real file sits here — merge it into AGENTS.md (or run `agentlink adopt`)",
-  };
+  return { op, state: "skipped", detail: blockerMessage(op, existing.kind) };
+}
+
+function blockerMessage(op: LinkOp, kind: "file" | "dir"): string {
+  if (op.kind === "instructions") {
+    return kind === "dir"
+      ? `a directory sits at ${op.rel} — remove it, or point it at AGENTS.md yourself`
+      : `a real instructions file sits here — merge it into AGENTS.md and re-run`;
+  }
+  return kind === "dir"
+    ? "a real directory sits here — run `agentlink fix` to fold it into .agents/skills"
+    : "a real file sits here — remove it and re-run";
 }
 
 /**
- * A path agentlink owns: either the canonical AGENTS.md it links aliases to,
- * or anything inside <root>/.agents. Only these are safe to replace or delete.
+ * True when agentlink created a path: the canonical AGENTS.md it links aliases
+ * to, or anything inside <root>/.agents. Only these are safe to replace/delete.
  */
 function isOwned(paths: ScopePaths, target: string | undefined): boolean {
   if (!target) return false;
@@ -193,17 +235,28 @@ function isOwned(paths: ScopePaths, target: string | undefined): boolean {
   return target === paths.agentsDir || target.startsWith(owned);
 }
 
-interface Inspection {
-  kind: "missing" | "symlink" | "file" | "dir";
-  resolved?: string;
+/** True when `target` is inside `root` after normalisation. */
+export function isInside(root: string, target: string): boolean {
+  const resolved = path.resolve(root, target);
+  return resolved === root || resolved.startsWith(`${root}${path.sep}`);
 }
 
-function inspect(target: string): Inspection {
+interface Inspection {
+  kind: "missing" | "symlink" | "file" | "dir" | "error";
+  resolved?: string;
+  detail?: string;
+}
+
+export function inspect(target: string): Inspection {
   let stat;
   try {
     stat = lstatSync(target);
-  } catch {
-    return { kind: "missing" };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    // Anything other than "does not exist" (ENOTDIR, EACCES, ELOOP, …) is a
+    // real problem the caller must report rather than paper over by writing.
+    if (code === "ENOENT") return { kind: "missing" };
+    return { kind: "error", detail: `${code ?? "unknown error"}` };
   }
   if (stat.isSymbolicLink()) {
     return { kind: "symlink", resolved: path.resolve(path.dirname(target), readlinkSync(target)) };
@@ -231,7 +284,11 @@ export function readState(paths: ScopePaths): State {
         scope: parsed.scope ?? paths.scope,
         harnesses: parsed.harnesses ?? [],
         ignore: parsed.ignore ?? "skills",
-        links: parsed.links ?? [],
+        // A hand-edited or hostile state file must not let a later unlink reach
+        // outside the scope root.
+        links: (parsed.links ?? []).filter(
+          (link) => typeof link?.path === "string" && isInside(paths.root, link.path),
+        ),
       };
     }
   } catch {
@@ -242,7 +299,48 @@ export function readState(paths: ScopePaths): State {
 
 export function writeState(paths: ScopePaths, state: State): void {
   mkdirSync(paths.agentsDir, { recursive: true });
-  writeFileSync(paths.stateFile, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  writeFileAtomic(paths.stateFile, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+/** Write via a temp file and rename, so an interrupted run cannot truncate. */
+export function writeFileAtomic(file: string, contents: string): void {
+  const temporary = `${file}.agentlink-tmp`;
+  writeFileSync(temporary, contents, "utf8");
+  renameSync(temporary, file);
+}
+
+/**
+ * Remove links agentlink owns that the current plan no longer wants: a
+ * deselected harness, or a skill that was renamed or deleted. Without this the
+ * old symlinks stay behind and dangle.
+ */
+export function pruneStale(
+  paths: ScopePaths,
+  plan: Plan,
+  previous: State,
+  options: { dryRun?: boolean } = {},
+): string[] {
+  const wanted = new Set(plan.ops.map((op) => op.rel));
+  const removed: string[] = [];
+
+  for (const link of previous.links) {
+    if (wanted.has(link.path) || !isInside(paths.root, link.path)) continue;
+    const target = path.join(paths.root, link.path);
+    const existing = inspect(target);
+    if (existing.kind !== "symlink" || !isOwned(paths, existing.resolved)) continue;
+    if (!options.dryRun) {
+      unlinkSync(target);
+      pruneEmptyParents(path.dirname(target), paths.root);
+    }
+    removed.push(link.path);
+  }
+  return removed;
+}
+
+export interface MergeOptions {
+  ignore?: string;
+  /** Kept links shrink to this set; pair with pruneStale to delete them. */
+  plannedRels?: string[];
 }
 
 /** Fold this run's results into the previous state. */
@@ -251,9 +349,13 @@ export function mergeState(
   previous: State,
   results: ApplyResult[],
   harnessIds: string[],
-  options: { ignore?: string } = {},
+  options: MergeOptions = {},
 ): State {
-  const links = new Map(previous.links.map((link) => [link.path, link]));
+  const planned = options.plannedRels ? new Set(options.plannedRels) : undefined;
+  const links = new Map(
+    previous.links.filter((link) => !planned || planned.has(link.path)).map((link) => [link.path, link]),
+  );
+
   for (const result of results) {
     if (result.state === "skipped") continue;
     links.set(result.op.rel, {
@@ -261,6 +363,7 @@ export function mergeState(
       source: relativeTo(paths.root, result.op.source),
     });
   }
+
   return {
     version: 1,
     scope: paths.scope,
@@ -285,6 +388,10 @@ export function unlink(paths: ScopePaths, options: { dryRun?: boolean } = {}): U
   const kept: { path: string; reason: string }[] = [];
 
   for (const link of state.links) {
+    if (!isInside(paths.root, link.path)) {
+      kept.push({ path: link.path, reason: "outside this scope" });
+      continue;
+    }
     const target = path.join(paths.root, link.path);
     const existing = inspect(target);
     if (existing.kind === "missing") continue;
@@ -307,7 +414,7 @@ export function unlink(paths: ScopePaths, options: { dryRun?: boolean } = {}): U
   return { removed, kept };
 }
 
-function pruneEmptyParents(dir: string, root: string): void {
+export function pruneEmptyParents(dir: string, root: string): void {
   let current = dir;
   while (current !== root && current.startsWith(`${root}${path.sep}`)) {
     try {
@@ -319,4 +426,4 @@ function pruneEmptyParents(dir: string, root: string): void {
   }
 }
 
-export { inspect, isOwned };
+export { isOwned };

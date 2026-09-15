@@ -46,27 +46,29 @@ Options: `--global` (`-g`) for `$HOME` instead of a repository, `--harnesses a,b
 
 Where a harness already reads `AGENTS.md` or `.agents/skills/`, agentlink writes nothing and reports the path as native. Links appear only for harnesses that need a file in a place of their own.
 
-| Harness | Project instructions | Project skills | Verified |
+| Harness | Project instructions | Project skills | Confirmed |
 | --- | --- | --- | --- |
 | Claude Code | CLAUDE.md | .claude/skills | yes |
 | OpenAI Codex CLI | native | native | yes |
 | Pi | native | native | yes |
 | Oh My Pi (omp) | native | .omp/skills | yes |
 | GitHub Copilot CLI | native | native | yes |
-| Cursor | native | .cursor/skills | no |
-| opencode | native | .opencode/skills | no |
+| Cursor | native | .cursor/skills | no (skills) |
+| opencode | native | .opencode/skills | no (skills) |
 | Qwen Code | native | .qwen/skills | yes |
 | Kimi Code CLI | native | .kimi-code/skills | yes |
-| Kilo Code | native | .claude/skills | no |
+| Kilo Code | native | .claude/skills | no (skills) |
 | Factory Droid | native | .factory/skills | yes |
 | Devin CLI | native | .devin/skills | yes |
 | Mastra Code | native | native | yes |
 | Grok CLI | native | .grok/skills | yes |
 | Qoder CLI | native | .qoder/skills | yes |
-| Antigravity CLI | native | .agent/skills | no |
-| Hermes | native | .hermes/skills | no |
+| Antigravity CLI | native | .agent/skills | no (instructions, skills) |
+| Hermes | native | .hermes/skills | no (instructions, skills) |
 
-Rows marked unverified come from third-party path tables or could not be confirmed in vendor documentation. `agentlink list --json` prints the source URL for every row, and `doctor` flags unverified rows in the active selection. The global scope has more unverified rows than the project scope, because fewer vendors document where their home-directory instruction file lives.
+Confirmation is tracked per endpoint, not per harness, and per scope. A harness can have a documented project path and an undocumented global one. `agentlink list --json` prints the flag and the source URL for each endpoint, and `doctor` names every unverified path in your selection.
+
+The global scope is the weaker half of the table on purpose. Fewer vendors document where their home-directory instructions file lives, so `--global` links more speculative paths than a project does. Both scopes are listed in `list --json`.
 
 ## Global scope
 
@@ -105,7 +107,11 @@ If a harness file already exists as a real file, sync leaves it alone and report
 
 `agentlink unlink` removes a symlink only when it still points at `AGENTS.md` or into `.agents/`. Anything that has become a real file gets kept and reported. Empty directories left behind are pruned.
 
+`sync` also removes links it created that are no longer wanted: deselect a harness with `select`, or delete a skill from `.agents/skills/`, and the leftover symlink is pruned on the next run rather than left dangling. Pruning only ever removes a symlink that still points into `.agents/`.
+
 Every command takes `--dry-run`.
+
+`doctor` exits non-zero when it finds an error, so it works as a CI check. A run that leaves an unresolved conflict (`init`, `fix`) also exits non-zero, which stops a scripted conversion instead of silently leaving two copies of a skill.
 
 ## Limits worth knowing
 

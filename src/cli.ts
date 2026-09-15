@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 import { mkdirSync } from "node:fs";
-import path from "node:path";
-import { adoptInstructions, ensureClause, initConvention } from "./convention.js";
-import { detectAll } from "./detect.js";
-import { diagnose, readSkills } from "./doctor.js";
-import { applyFixes, planFixes, type FixAction } from "./fix.js";
-import { HARNESSES, resolveHarnessList, type Harness } from "./harnesses.js";
-import { isIgnoreMode, readIgnoreBlock, removeIgnoreBlock, updateGitignore, type IgnoreMode } from "./ignore.js";
-import { apply, mergeState, plan, readState, unlink, writeState } from "./link.js";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { adoptInstructions, ensureClause, initConvention, type AdoptResult } from "./convention.js";
+import { detectAll } from "./detect.js";
+import { diagnose, readSkills } from "./doctor.js";
+import { applyFixes, planFixes, type FixResult } from "./fix.js";
+import { endpointVerified, HARNESSES, resolveHarnessList, type Harness } from "./harnesses.js";
+import { isIgnoreMode, readIgnoreBlock, removeIgnoreBlock, updateGitignore, type IgnoreMode } from "./ignore.js";
+import { apply, mergeState, plan, pruneStale, readState, unlink, writeState } from "./link.js";
 import { resolveScope, type Scope, type ScopePaths } from "./scope.js";
 import { selectMany, type Choice } from "./ui.js";
 
@@ -37,7 +37,7 @@ interface Options {
   ignore?: IgnoreMode;
 }
 
-const COMMANDS = ["init", "sync", "select", "fix", "list", "doctor", "adopt", "unlink", "help"] as const;
+const COMMANDS = ["init", "sync", "select", "fix", "list", "doctor", "adopt", "unlink", "help", "version"] as const;
 
 function parseArgs(argv: string[]): Options {
   const options: Options = {
@@ -70,13 +70,11 @@ function parseArgs(argv: string[]): Options {
       const value = arg.slice("--ignore=".length);
       if (!isIgnoreMode(value)) fail(`--ignore must be one of skills, all, none (got \`${value}\`)`);
       options.ignore = value;
-    } else if (arg === "--ignore") {
-      options.ignore = "skills";
-    } else if (arg.startsWith("--harnesses=")) options.harnessIds = split(arg.slice("--harnesses=".length));
+    } else if (arg === "--ignore") options.ignore = "skills";
+    else if (arg.startsWith("--harnesses=")) options.harnessIds = split(arg.slice("--harnesses=".length));
     else if (arg === "--harnesses") options.harnessIds = [];
-    else if (arg.startsWith("-")) {
-      fail(`unknown option \`${arg}\``, true);
-    } else positional.push(arg);
+    else if (arg.startsWith("-")) fail(`unknown option \`${arg}\``, true);
+    else positional.push(arg);
   }
 
   const [first] = positional;
@@ -84,9 +82,7 @@ function parseArgs(argv: string[]): Options {
     if ((COMMANDS as readonly string[]).includes(first)) options.command = first;
     else fail(`unknown command \`${first}\` — try \`agentlink help\``);
   }
-  if (positional.length > 1) {
-    options.harnessIds = split(positional.slice(1).join(","));
-  }
+  if (positional.length > 1) options.harnessIds = split(positional.slice(1).join(","));
   return options;
 }
 
@@ -109,8 +105,7 @@ async function main(): Promise<void> {
   if (options.command === "help") return help();
   if (options.command === "version") return version();
 
-  const cwd = process.cwd();
-  const paths = resolveScope(options.scope, cwd);
+  const paths = resolveScope(options.scope, process.cwd());
 
   switch (options.command) {
     case "init":
@@ -137,13 +132,15 @@ async function main(): Promise<void> {
 // --- commands ---------------------------------------------------------------
 
 async function runInit(paths: ScopePaths, options: Options): Promise<void> {
-  const chosen = await chooseHarnesses(paths, options, { prompt: true, fallback: "detected" });
+  const chosen = await chooseHarnesses(paths, options, { prompt: true });
 
-  // A repository that already has a real harness instructions file should have
-  // that content adopted rather than shadowed by a fresh stub.
-  const adopted = adoptInstructions(paths, { dryRun: options.dryRun });
-  if (adopted.performed && !options.json) {
-    step("adopt", `${path.basename(adopted.from ?? "")} → AGENTS.md`);
+  // A repository that already has real instructions should have them adopted
+  // rather than shadowed by a fresh stub.
+  const adoption = adoptInstructions(paths, { dryRun: options.dryRun });
+  if (adoption.performed && !options.json) {
+    step("adopt", `${path.basename(adoption.from ?? "")} → AGENTS.md`);
+  } else if (adoption.needsInvert && !options.json) {
+    process.stdout.write(`  ${YELLOW}!${RESET} ${adoption.reason}\n`);
   }
 
   const result = initConvention(paths, { dryRun: options.dryRun });
@@ -151,112 +148,113 @@ async function runInit(paths: ScopePaths, options: Options): Promise<void> {
 
   if (!options.json) {
     const where = paths.scope === "global" ? "~" : ".";
-    if (result.createdFile) step("create", `${where}/AGENTS.md`);
-    else step("keep", `${where}/AGENTS.md`);
-    if (result.createdSkillsDir) step("create", `${where}/.agents/skills/`);
-    else step("keep", `${where}/.agents/skills/`);
+    step(result.createdFile ? "create" : "keep", `${where}/AGENTS.md`);
+    step(result.createdSkillsDir ? "create" : "keep", `${where}/.agents/skills/`);
   }
-  migrateDuplicates(paths, chosen, options);
-  await syncLinks(paths, chosen, options);
+
+  const fixes = migrateDuplicates(paths, chosen, options);
+  await syncLinks(paths, chosen, options, { adoption, fixes });
 }
 
 async function runFix(paths: ScopePaths, options: Options): Promise<void> {
-  const chosen = await chooseHarnesses(paths, options, { prompt: false, fallback: "detected" });
+  const chosen = await chooseHarnesses(paths, options, { prompt: false });
   if (!existsSync(paths.instructions)) {
     if (!options.json) {
       process.stdout.write(`${DIM}no AGENTS.md here yet — run \`agentlink init\` first${RESET}\n`);
     }
     return;
   }
-  migrateDuplicates(paths, chosen, options);
-  await syncLinks(paths, chosen, options);
+  const fixes = migrateDuplicates(paths, chosen, options);
+  await syncLinks(paths, chosen, options, { fixes });
+}
+
+async function runSelect(paths: ScopePaths, options: Options): Promise<void> {
+  const chosen = await chooseHarnesses(paths, options, { prompt: true });
+  if (!options.json) {
+    process.stdout.write(`${DIM}selected:${RESET} ${chosen.map((h) => h.id).join(", ") || "(none)"}\n`);
+  }
+  await syncLinks(paths, chosen, options, {});
+}
+
+async function runSync(paths: ScopePaths, options: Options): Promise<void> {
+  const chosen = await chooseHarnesses(paths, options, { prompt: false });
+  await syncLinks(paths, chosen, options, {});
 }
 
 /** Resolve real copies sitting where a symlink belongs, without guessing. */
-function migrateDuplicates(paths: ScopePaths, chosen: Harness[], options: Options): void {
+function migrateDuplicates(paths: ScopePaths, chosen: Harness[], options: Options): FixResult[] {
   const actions = planFixes(paths, chosen);
-  if (actions.length === 0) return;
+  if (actions.length === 0) return [];
 
   const results = applyFixes(paths, actions, { dryRun: options.dryRun, force: options.force });
-  if (options.json) return;
+  if (options.json) return results;
 
   for (const result of results) {
     const dry = options.dryRun ? ` ${DIM}(dry run)${RESET}` : "";
-    if (result.kind === "move") {
+    if (result.kind === "move" && result.performed) {
       step("move", `${result.target} → ${result.canonical}${dry}`);
-    } else if (result.kind === "remove-identical") {
+    } else if (result.kind === "remove-identical" && result.performed) {
       step("cleanup", `${result.target} ${DIM}identical to the canonical copy${RESET}${dry}`);
-    } else {
+    } else if (result.kind === "conflict") {
       const command = result.skill ? "diff -r" : "diff";
       process.stdout.write(
         `  ${YELLOW}!${RESET} conflict ${result.target} ${DIM}${result.detail ?? ""}${RESET}\n` +
           `    ${DIM}fix: ${command} ${result.target} ${result.canonical}, merge by hand, then \`agentlink fix\`${RESET}\n` +
-          `         ${DIM}or \`agentlink fix --force\` to drop the copy in favour of the canonical one${RESET}\n`,
+          `         ${DIM}or \`agentlink fix --force\` to favour the canonical copy${RESET}\n`,
       );
     }
   }
+  return results;
 }
 
-async function runSelect(paths: ScopePaths, options: Options): Promise<void> {
-  const chosen = await chooseHarnesses(paths, options, { prompt: true, fallback: "detected" });
-  if (!options.json) {
-    process.stdout.write(`selected: ${chosen.map((h) => h.id).join(", ") || "(none)"}\n`);
-  }
-  await syncLinks(paths, chosen, options);
+interface SyncContext {
+  adoption?: AdoptResult;
+  fixes?: FixResult[];
 }
 
-async function runSync(paths: ScopePaths, options: Options): Promise<void> {
-  const chosen = await chooseHarnesses(paths, options, { prompt: false, fallback: "detected" });
-  await syncLinks(paths, chosen, options);
-}
-
-async function syncLinks(paths: ScopePaths, chosen: Harness[], options: Options): Promise<void> {
+async function syncLinks(
+  paths: ScopePaths,
+  chosen: Harness[],
+  options: Options,
+  context: SyncContext,
+): Promise<void> {
   const previous = readState(paths);
+  const desiredClause = options.clause && existsSync(paths.instructions);
 
   if (!options.dryRun && !existsSync(paths.skills) && existsSync(paths.instructions)) {
     mkdirSync(paths.skills, { recursive: true });
   }
 
-  const clauseResult =
-    options.clause && existsSync(paths.instructions)
-      ? ensureClause(paths, { dryRun: options.dryRun })
-      : undefined;
+  const clauseResult = desiredClause ? ensureClause(paths, { dryRun: options.dryRun }) : undefined;
 
   const linkPlan = plan(paths, chosen);
   const results = apply(paths, linkPlan, { dryRun: options.dryRun });
+  const pruned = pruneStale(paths, linkPlan, previous, { dryRun: options.dryRun });
 
   const mode: IgnoreMode = options.ignore ?? (isIgnoreMode(previous.ignore) ? previous.ignore : "skills");
   const ignoreResult = updateGitignore(
     paths,
     mode,
     {
-      skillDirs: unique(linkPlan.ops.filter((op) => op.kind === "skill").map((op) => path.posix.dirname(op.rel))),
-      instructionFiles: unique(
-        linkPlan.ops.filter((op) => op.kind === "instructions").map((op) => op.rel),
-      ),
+      skillDirs: unique([
+        ...linkPlan.ops.filter((op) => op.kind === "skill").map((op) => path.posix.dirname(op.rel)),
+        ...linkPlan.aliases.map((alias) => alias.rel),
+      ]),
+      instructionFiles: unique(linkPlan.ops.filter((op) => op.kind === "instructions").map((op) => op.rel)),
     },
     { dryRun: options.dryRun },
   );
 
   if (!options.dryRun) {
-    const state = mergeState(paths, previous, results, chosen.map((h) => h.id), { ignore: mode });
+    const state = mergeState(paths, previous, results, chosen.map((h) => h.id), {
+      ignore: mode,
+      plannedRels: linkPlan.ops.map((op) => op.rel),
+    });
     writeState(paths, state);
   }
 
-  if (clauseResult?.changed && !options.json) {
-    step("clause", `${path.basename(paths.instructions)} ${DIM}(${clauseResult.action})${RESET}`);
-  }
-  if (!options.json && !ignoreResult.skipped) {
-    const count = ignoreResult.entries.length;
-    if (ignoreResult.changed) {
-      step(
-        "ignore",
-        `.gitignore ${DIM}(${count} entr${count === 1 ? "y" : "ies"}${options.dryRun ? ", would update" : ""})${RESET}`,
-      );
-    } else {
-      step("ignore", `.gitignore ${DIM}(already covers ${count} path${count === 1 ? "" : "s"})${RESET}`);
-    }
-  }
+  const conflicts = (context.fixes ?? []).filter((fix) => fix.kind === "conflict" && !fix.performed);
+  const blocked = results.filter((result) => result.state === "skipped");
 
   if (options.json) {
     process.stdout.write(
@@ -264,23 +262,40 @@ async function syncLinks(paths: ScopePaths, chosen: Harness[], options: Options)
         {
           scope: paths.scope,
           root: paths.root,
+          dryRun: options.dryRun,
           harnesses: chosen.map((h) => h.id),
-          links: results.map((r) => ({ path: r.op.rel, state: r.state, harnesses: r.op.harnessIds, detail: r.detail })),
-          skipped: linkPlan.skips.map((s) => ({ path: s.rel, reason: s.reason, harnesses: s.harnessIds })),
+          adoption: context.adoption ?? null,
+          fixes: (context.fixes ?? []).map((fix) => ({
+            target: fix.target,
+            canonical: fix.canonical,
+            kind: fix.kind,
+            performed: fix.performed,
+          })),
+          links: results.map((result) => ({
+            path: result.op.rel,
+            state: result.state,
+            harnesses: result.op.harnessIds,
+            detail: result.detail,
+          })),
+          skipped: linkPlan.skips.map((skip) => ({ path: skip.rel, reason: skip.reason, harnesses: skip.harnessIds })),
+          pruned,
           native: linkPlan.native,
           unknown: linkPlan.unknown,
+          aliases: linkPlan.aliases,
           skills: linkPlan.skillsFound,
+          conflicts: conflicts.map((fix) => fix.target),
           ignore: {
             mode,
             file: ignoreResult.skipped ? null : ignoreResult.file,
             entries: ignoreResult.entries,
-            changed: ignoreResult.changed,
+            status: ignoreResult.status,
           },
         },
         null,
         2,
       )}\n`,
     );
+    if (conflicts.length > 0) process.exit(1);
     return;
   }
 
@@ -301,42 +316,70 @@ async function syncLinks(paths: ScopePaths, chosen: Harness[], options: Options)
     process.stdout.write(`  ${symbol} ${result.op.rel} ${DIM}${verb}${RESET}${detail}\n`);
   }
 
-  const skipped = linkPlan.skips;
-  for (const skippedOp of skipped) {
-    process.stdout.write(`  ${DIM}·${RESET} ${skippedOp.rel} ${DIM}${skippedOp.reason}${RESET}\n`);
+  for (const gone of pruned) {
+    process.stdout.write(`  ${DIM}- ${gone} removed (no longer wanted)${RESET}\n`);
+  }
+
+  for (const skip of linkPlan.skips) {
+    process.stdout.write(`  ${DIM}· ${skip.rel} ${skip.reason}${RESET}\n`);
+  }
+
+  if (clauseResult?.action === "malformed") {
+    process.stdout.write(
+      `  ${YELLOW}!${RESET} ${path.basename(paths.instructions)} has an unterminated agentlink clause — fix it by hand\n`,
+    );
+  } else if (clauseResult?.changed) {
+    step("clause", `${path.basename(paths.instructions)} ${DIM}(${clauseResult.action})${RESET}`);
+  }
+
+  if (ignoreResult.status === "malformed") {
+    process.stdout.write(
+      `  ${YELLOW}!${RESET} .gitignore has an unmatched agentlink marker — remove that line and re-run\n`,
+    );
+  } else if (!ignoreResult.skipped) {
+    const count = ignoreResult.entries.length;
+    const suffix = options.dryRun ? ", would update" : "";
+    step(
+      "ignore",
+      ignoreResult.status === "updated"
+        ? `.gitignore ${DIM}(${count} entr${count === 1 ? "y" : "ies"}${suffix})${RESET}`
+        : `.gitignore ${DIM}(already covers ${count} path${count === 1 ? "" : "s"})${RESET}`,
+    );
   }
 
   const created = results.filter((r) => r.state === "linked" || r.state === "relinked").length;
   const unchanged = results.filter((r) => r.state === "unchanged").length;
-  const blocked = results.filter((r) => r.state === "skipped").length + skipped.length;
-  const nativeCount = linkPlan.native.length;
+  const blockedCount = blocked.length + linkPlan.skips.length;
 
   process.stdout.write(
-    `\n  ${created} ${options.dryRun ? "to link" : "linked"}${unchanged ? `, ${unchanged} already correct` : ""}${blocked ? `, ${blocked} blocked` : ""}, ${nativeCount} native (nothing to do)\n`,
+    `\n  ${created} ${options.dryRun ? "to link" : "linked"}${unchanged ? `, ${unchanged} already correct` : ""}${pruned.length ? `, ${pruned.length} pruned` : ""}${blockedCount ? `, ${blockedCount} blocked` : ""}, ${linkPlan.native.length} native (nothing to do)\n`,
   );
 
-  if (results.some((r) => r.state === "skipped")) {
+  for (const alias of linkPlan.aliases) {
+    process.stdout.write(`  ${DIM}· ${alias.rel} → .agents/skills (already linked)${RESET}\n`);
+  }
+
+  if (blocked.length > 0) {
     process.stdout.write(`  ${DIM}run \`agentlink doctor\` for what to do about the blocked links${RESET}\n`);
   }
   if (!existsSync(paths.instructions)) {
     process.stdout.write(`  ${DIM}no AGENTS.md yet — \`agentlink init\` creates it${RESET}\n`);
   } else if (linkPlan.skillsFound.length === 0) {
-    process.stdout.write(
-      `  ${DIM}no skills yet — add one at .agents/skills/<name>/SKILL.md${RESET}\n`,
-    );
+    process.stdout.write(`  ${DIM}no skills yet — add one at .agents/skills/<name>/SKILL.md${RESET}\n`);
   }
+  if (conflicts.length > 0) process.exit(1);
 }
 
 async function runList(paths: ScopePaths, options: Options): Promise<void> {
-  const detections = detectAll();
-  const rows = detections.map(({ harness, installed, reasons }) => ({
+  const rows = detectAll().map(({ harness, installed, reasons }) => ({
     id: harness.id,
     label: harness.label,
     installed,
     reasons,
-    instructions: describe(harness.instructions[paths.scope], paths),
-    skills: describe(harness.skills[paths.scope], paths),
-    verified: harness.verified,
+    instructions: describe(harness.instructions[paths.scope]),
+    skills: describe(harness.skills[paths.scope]),
+    instructionsVerified: endpointVerified(harness.instructions[paths.scope]),
+    skillsVerified: endpointVerified(harness.skills[paths.scope]),
     source: harness.source,
   }));
 
@@ -347,20 +390,23 @@ async function runList(paths: ScopePaths, options: Options): Promise<void> {
 
   const width = Math.max(...rows.map((row) => row.label.length));
   process.stdout.write(
-    `\n${BOLD}harnesses${RESET} ${DIM}· scope: ${paths.scope} · ${path.join(paths.scope === "global" ? "~" : ".", "")}${RESET}\n\n`,
+    `\n${BOLD}harnesses${RESET} ${DIM}· scope: ${paths.scope}${RESET}\n\n`,
   );
   for (const row of rows) {
     const mark = row.installed ? `${GREEN}●${RESET}` : `${DIM}○${RESET}`;
-    const flag = row.verified ? "" : ` ${YELLOW}unverified${RESET}`;
-    process.stdout.write(`  ${mark} ${row.label.padEnd(width)}  ${DIM}instructions${RESET} ${row.instructions}  ${DIM}skills${RESET} ${row.skills}${flag}\n`);
+    const flag =
+      !row.instructionsVerified || !row.skillsVerified ? ` ${YELLOW}unverified${RESET}` : "";
+    process.stdout.write(
+      `  ${mark} ${row.label.padEnd(width)}  ${DIM}instructions${RESET} ${row.instructions}  ${DIM}skills${RESET} ${row.skills}${flag}\n`,
+    );
   }
   process.stdout.write(
     `\n  ${GREEN}●${RESET} present on this machine   ${DIM}native = harness reads AGENTS.md / .agents/skills itself${RESET}\n` +
-      `  ${DIM}agentlink list --json prints source URLs for every path${RESET}\n`,
+      `  ${DIM}agentlink list --json prints the source URL for every row${RESET}\n`,
   );
 }
 
-function describe(endpoint: { native: boolean; alias?: string }, _paths: ScopePaths): string {
+function describe(endpoint: { native: boolean; alias?: string }): string {
   if (endpoint.native) return `${CYAN}native${RESET}`;
   if (!endpoint.alias) return `${DIM}unknown${RESET}`;
   return endpoint.alias;
@@ -373,15 +419,27 @@ function runDoctor(paths: ScopePaths, options: Options): void {
   const chosen = state.harnesses.length
     ? HARNESSES.filter((h) => state.harnesses.includes(h.id))
     : detectAll()
-        .filter((d) => d.installed)
-        .map((d) => d.harness);
-  const findings = diagnose({ paths, harnesses: chosen, home: paths.root });
+        .filter((detection) => detection.installed)
+        .map((detection) => detection.harness);
+  const findings = diagnose({ paths, harnesses: chosen });
   const errors = findings.filter((f) => f.severity === "error").length;
   const warns = findings.filter((f) => f.severity === "warn").length;
 
   if (options.json) {
     process.stdout.write(
-      `${JSON.stringify({ scope: paths.scope, root: paths.root, skills: readSkills(paths).map((s) => s.name), findings }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          scope: paths.scope,
+          root: paths.root,
+          harnesses: chosen.map((h) => h.id),
+          skills: readSkills(paths).map((skill) => skill.name),
+          findings,
+          errors,
+          warnings: warns,
+        },
+        null,
+        2,
+      )}\n`,
     );
     process.exit(errors > 0 ? 1 : 0);
   }
@@ -389,17 +447,22 @@ function runDoctor(paths: ScopePaths, options: Options): void {
   const where = paths.scope === "global" ? "~" : paths.root;
   process.stdout.write(`\n${BOLD}agentlink doctor${RESET} ${DIM}${where}${RESET}\n\n`);
   if (findings.length === 0) {
-    process.stdout.write(`  ${GREEN}✓${RESET} convention intact${chosen.length ? `, ${chosen.length} harnesses linked` : ""}\n\n`);
+    process.stdout.write(
+      `  ${GREEN}✓${RESET} convention intact${chosen.length ? `, ${chosen.length} harness${chosen.length === 1 ? "" : "es"} selected` : ""}\n\n`,
+    );
     return;
   }
   for (const severity of ["error", "warn", "info"] as const) {
     for (const finding of findings.filter((f) => f.severity === severity)) {
-      const symbol = severity === "error" ? `${RED}✗${RESET}` : severity === "warn" ? `${YELLOW}!${RESET}` : `${DIM}·${RESET}`;
+      const symbol =
+        severity === "error" ? `${RED}✗${RESET}` : severity === "warn" ? `${YELLOW}!${RESET}` : `${DIM}·${RESET}`;
       process.stdout.write(`  ${symbol} ${finding.message}\n`);
       if (finding.fix) process.stdout.write(`    ${DIM}fix: ${finding.fix}${RESET}\n`);
     }
   }
-  process.stdout.write(`\n  ${errors} error${errors === 1 ? "" : "s"}, ${warns} warning${warns === 1 ? "" : "s"}\n\n`);
+  process.stdout.write(
+    `\n  ${errors} error${errors === 1 ? "" : "s"}, ${warns} warning${warns === 1 ? "" : "s"}\n\n`,
+  );
   process.exit(errors > 0 ? 1 : 0);
 }
 
@@ -407,21 +470,22 @@ function runAdopt(paths: ScopePaths, options: Options): void {
   const result = adoptInstructions(paths, { dryRun: options.dryRun });
   if (options.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (result.needsInvert) process.exit(1);
     return;
   }
-  if (!result.performed) {
-    if (result.from) {
-      process.stdout.write(
-        `${YELLOW}!${RESET} would rename ${path.basename(result.from)} → AGENTS.md ${DIM}(dry run; then run \`agentlink sync\`)${RESET}\n`,
-      );
-      return;
-    }
-    process.stdout.write(`${DIM}nothing to adopt: ${result.reason}${RESET}\n`);
-    if (result.reason?.includes("merge")) process.exit(1);
+  if (result.performed) {
+    step("adopt", `${path.basename(result.from ?? "")} → AGENTS.md`);
+    process.stdout.write(`  ${DIM}now run \`agentlink sync\` to link it back into every harness${RESET}\n`);
     return;
   }
-  step("adopt", `${path.basename(result.from ?? "")} → AGENTS.md`);
-  process.stdout.write(`  ${DIM}now run \`agentlink sync\` to link it back into every harness${RESET}\n`);
+  if (result.from) {
+    process.stdout.write(
+      `${YELLOW}!${RESET} would rename ${path.basename(result.from)} → AGENTS.md ${DIM}(dry run; then run \`agentlink sync\`)${RESET}\n`,
+    );
+    return;
+  }
+  process.stdout.write(`${DIM}nothing to adopt: ${result.reason}${RESET}\n`);
+  if (result.needsInvert || result.reason?.includes("merge") || result.reason?.includes("several")) process.exit(1);
 }
 
 function runUnlink(paths: ScopePaths, options: Options): void {
@@ -432,17 +496,21 @@ function runUnlink(paths: ScopePaths, options: Options): void {
     return;
   }
   for (const removed of result.removed) step("unlink", removed);
-  for (const keep of result.kept) process.stdout.write(`  ${YELLOW}!${RESET} kept ${keep.path} ${DIM}(${keep.reason})${RESET}\n`);
+  for (const keep of result.kept) {
+    process.stdout.write(`  ${YELLOW}!${RESET} kept ${keep.path} ${DIM}(${keep.reason})${RESET}\n`);
+  }
   if (ignoreChanged) step("ignore", `.gitignore ${DIM}(block removed)${RESET}`);
   if (result.removed.length === 0 && result.kept.length === 0) {
     process.stdout.write(`${DIM}nothing to unlink${RESET}\n`);
   }
 }
 
+// --- selection --------------------------------------------------------------
+
 async function chooseHarnesses(
   paths: ScopePaths,
   options: Options,
-  behaviour: { prompt: boolean; fallback: "detected" | "all" },
+  behaviour: { prompt: boolean },
 ): Promise<Harness[]> {
   const state = readState(paths);
 
@@ -454,16 +522,28 @@ async function chooseHarnesses(
   if (options.all) return HARNESSES;
   if (options.detected) return detectedHarnesses();
 
-  if (state.harnesses.length > 0) {
+  // Asking for a specific command or an explicit selection is the only reason to
+  // reuse a saved selection; init and select are about choosing.
+  if (!behaviour.prompt && state.harnesses.length > 0) {
     const fromState = HARNESSES.filter((h) => state.harnesses.includes(h.id));
     if (fromState.length > 0) return fromState;
   }
 
-  const interactive = behaviour.prompt || (options.command === "sync" && !options.yes && process.stdin.isTTY);
-  if (interactive) {
-    return promptForHarnesses();
+  // Never prompt when the caller cannot answer: --yes, --json, or no TTY.
+  const canPrompt = !options.yes && !options.json && process.stdin.isTTY === true && process.stdout.isTTY === true;
+  if (behaviour.prompt && canPrompt) return promptForHarnesses();
+
+  const fallback = detectedHarnesses();
+  if (!options.json) {
+    const names = fallback.map((h) => h.id).join(", ") || "none";
+    process.stdout.write(
+      `${DIM}harnesses present on this machine: ${names}${canPrompt ? "" : " (not prompting)"}${RESET}\n`,
+    );
+    if (!canPrompt) {
+      process.stdout.write(`${DIM}pass --harnesses, --all or --detected to choose explicitly${RESET}\n`);
+    }
   }
-  return behaviour.fallback === "all" ? HARNESSES : detectedHarnesses();
+  return fallback;
 }
 
 async function promptForHarnesses(): Promise<Harness[]> {
@@ -484,8 +564,7 @@ async function promptForHarnesses(): Promise<Harness[]> {
     process.stdout.write(`${DIM}cancelled${RESET}\n`);
     process.exit(0);
   }
-  const chosen = detections.filter((d) => picked.includes(d.harness.id)).map((d) => d.harness);
-  return dedupe(chosen);
+  return dedupe(detections.filter((d) => picked.includes(d.harness.id)).map((d) => d.harness));
 }
 
 function detectedHarnesses(): Harness[] {
@@ -497,8 +576,7 @@ function dedupe(harnesses: Harness[]): Harness[] {
 }
 
 function step(verb: string, message: string): void {
-  const padded = verb.padEnd(7);
-  process.stdout.write(`  ${GREEN}✓${RESET} ${DIM}${padded}${RESET}${message}\n`);
+  process.stdout.write(`  ${GREEN}✓${RESET} ${DIM}${verb.padEnd(7)}${RESET}${message}\n`);
 }
 
 function version(): void {
@@ -517,7 +595,7 @@ ${BOLD}agentlink${RESET} ${DIM}— one source of truth for agent instructions an
 
 ${BOLD}usage${RESET}
   agentlink                      pick harnesses (first run), then link
-  agentlink init                 create AGENTS.md + .agents/skills and link
+  agentlink init                 create AGENTS.md + .agents/skills, migrate, link
   agentlink sync                 re-link after adding or moving a skill
   agentlink fix                  fold stray real copies into .agents, then link
   agentlink select               change which harnesses are linked
@@ -557,3 +635,5 @@ main().catch((error: unknown) => {
   process.stderr.write(`${RED}error${RESET} ${message}\n`);
   process.exit(1);
 });
+
+export { readIgnoreBlock };

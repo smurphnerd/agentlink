@@ -1,9 +1,14 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync } from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "./link.js";
 import type { ScopePaths } from "./scope.js";
 
 export const BEGIN_MARKER = "<!-- agentlink:begin v1 -->";
 export const END_MARKER = "<!-- agentlink:end -->";
+
+/** Whole-line markers only: prose mentioning the marker is not the marker. */
+const BEGIN_LINE = /^<!-- agentlink:begin v1 -->[ \t]*$/m;
+const END_LINE = /^<!-- agentlink:end -->[ \t]*$/m;
 
 /**
  * The clause agentlink appends to AGENTS.md.
@@ -33,31 +38,38 @@ file next to one — edit or create the source it points to.
   so every harness picks up the change.
 ${END_MARKER}`;
 
+export type ClauseAction = "inserted" | "updated" | "unchanged" | "malformed";
+
 export interface ClauseResult {
   changed: boolean;
-  action: "inserted" | "updated" | "unchanged" | "created-file";
+  action: ClauseAction;
   file: string;
 }
 
 export function hasClause(text: string): boolean {
-  return text.includes(BEGIN_MARKER);
+  return BEGIN_LINE.test(text);
 }
 
-/** Insert the clause, or replace the existing one in place. Idempotent. */
-export function upsertClause(text: string): { text: string; changed: boolean; action: ClauseResult["action"] } {
-  const start = text.indexOf(BEGIN_MARKER);
-  if (start !== -1) {
-    const end = text.indexOf(END_MARKER, start);
-    if (end !== -1) {
-      const existing = text.slice(start, end + END_MARKER.length);
-      if (existing === CLAUSE) return { text, changed: false, action: "unchanged" };
-      return {
-        text: text.slice(0, start) + CLAUSE + text.slice(end + END_MARKER.length),
-        changed: true,
-        action: "updated",
-      };
-    }
+/**
+ * Insert the clause, or replace the existing one in place.
+ *
+ * A lone marker is left untouched: the text after an unterminated block might be
+ * the user's own prose, and guessing would delete it.
+ */
+export function upsertClause(text: string): { text: string; changed: boolean; action: ClauseAction } {
+  const begin = BEGIN_LINE.exec(text);
+  const end = END_LINE.exec(text);
+  if (begin && !end) return { text, changed: false, action: "malformed" };
+  if (!begin && end) return { text, changed: false, action: "malformed" };
+
+  if (begin && end) {
+    const endIndex = end.index;
+    const existing = text.slice(begin.index, endIndex + end[0].length);
+    if (existing === CLAUSE) return { text, changed: false, action: "unchanged" };
+    const next = `${text.slice(0, begin.index)}${CLAUSE}${text.slice(endIndex + end[0].length)}`;
+    return { text: next, changed: true, action: "updated" };
   }
+
   const trimmed = text.replace(/\s+$/, "");
   const separator = trimmed.length === 0 ? "" : "\n\n";
   return { text: `${trimmed}${separator}${CLAUSE}\n`, changed: true, action: "inserted" };
@@ -68,12 +80,11 @@ export function ensureClause(
   options: { dryRun?: boolean } = {},
 ): ClauseResult {
   const file = paths.instructions;
-  if (!existsSync(file)) {
-    return { changed: false, action: "unchanged", file };
-  }
+  if (!existsSync(file)) return { changed: false, action: "unchanged", file };
+
   const before = readFileSync(file, "utf8");
   const { text, changed, action } = upsertClause(before);
-  if (changed && !options.dryRun) writeFileSync(file, text, "utf8");
+  if (changed && !options.dryRun) writeFileAtomic(file, text);
   return { changed, action, file };
 }
 
@@ -86,10 +97,9 @@ export function initConvention(
   if (createdFile && !options.dryRun) {
     const title = path.basename(paths.root) || "project";
     const heading = paths.scope === "global" ? "Global agent instructions" : title;
-    writeFileSync(
+    writeFileAtomic(
       paths.instructions,
       `# ${heading}\n\n<!-- One or two sentences: what this is, who it is for. -->\n\n## How to work\n\n<!-- Build, test and review commands; conventions that apply everywhere. -->\n\n${CLAUSE}\n`,
-      "utf8",
     );
   } else if (!options.dryRun) {
     ensureClause(paths, options);
@@ -111,6 +121,8 @@ export interface AdoptResult {
   reason?: string;
   from?: string;
   to?: string;
+  /** Set when the only blocker is a symlinked AGENTS.md. */
+  needsInvert?: boolean;
 }
 
 /**
@@ -123,18 +135,27 @@ export interface AdoptResult {
  */
 export function adoptInstructions(
   paths: ScopePaths,
-  options: { dryRun?: boolean; force?: boolean } = {},
+  options: { dryRun?: boolean } = {},
 ): AdoptResult {
   const candidates = ["CLAUDE.md", "GEMINI.md", "QWEN.md", "CRUSH.md", "WARP.md", "CONTEXT.md"];
   const present = candidates
     .map((name) => path.join(paths.root, name))
     .filter((file) => existsSync(file) && !isSymlink(file));
 
-  if (existsSync(paths.instructions) && !isSymlink(paths.instructions)) {
+  if (existsSync(paths.instructions)) {
+    if (isSymlink(paths.instructions)) {
+      // AGENTS.md is itself an alias, so something else holds the real content.
+      const link = isSymlink(paths.instructions) ? targetsOf(paths.instructions) : undefined;
+      return {
+        performed: false,
+        needsInvert: true,
+        reason: `AGENTS.md is a symlink${link ? ` to ${link}` : ""} — make AGENTS.md the real file and link the other name to it`,
+      };
+    }
     if (present.length > 0) {
       return {
         performed: false,
-        reason: `AGENTS.md and ${present.map((p) => path.basename(p)).join(", ")} both contain real content — merge by hand, then re-run`,
+        reason: `AGENTS.md and ${present.map((p) => path.basename(p)).join(", ")} both contain real content — merge them by hand, then re-run`,
       };
     }
     return { performed: false, reason: "AGENTS.md already exists" };
@@ -142,9 +163,10 @@ export function adoptInstructions(
 
   if (present.length === 0) return { performed: false, reason: "no harness instructions file to adopt" };
   if (present.length > 1) {
+    const names = present.map((p) => path.basename(p));
     return {
       performed: false,
-      reason: `${present.length} candidate files (${present.map((p) => path.basename(p)).join(", ")}) — pick one with --from`,
+      reason: `several candidates (${names.join(", ")}) — keep one, delete or merge the others, then re-run`,
     };
   }
 
@@ -152,6 +174,7 @@ export function adoptInstructions(
   if (options.dryRun) {
     return { performed: false, reason: "dry run", from, to: paths.instructions };
   }
+  // A rename keeps the original bytes and shows up as a rename in git.
   renameSync(from, paths.instructions);
   return { performed: true, from, to: paths.instructions };
 }
@@ -161,5 +184,13 @@ function isSymlink(file: string): boolean {
     return lstatSync(file).isSymbolicLink();
   } catch {
     return false;
+  }
+}
+
+function targetsOf(file: string): string | undefined {
+  try {
+    return readlinkSync(file);
+  } catch {
+    return undefined;
   }
 }

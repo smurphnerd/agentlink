@@ -27,6 +27,8 @@ export interface Endpoint {
   /** Path relative to the scope root; symlinked to the canonical source. */
   alias?: string;
   note?: string;
+  /** False when no vendor documentation confirms this path. Defaults to true. */
+  verified?: boolean;
 }
 
 export interface Harness {
@@ -38,8 +40,25 @@ export interface Harness {
   configRoot: string;
   instructions: Record<Scope, Endpoint>;
   skills: Record<Scope, Endpoint>;
+  /** Primary documentation these paths were read from. */
   source: string;
-  verified: boolean;
+}
+
+export function endpointVerified(endpoint: Endpoint): boolean {
+  return endpoint.verified !== false;
+}
+
+/** Endpoints in a scope that no vendor documentation confirms. */
+export function unverifiedEndpoints(
+  harness: Harness,
+  scope: Scope,
+): { kind: "instructions" | "skills"; endpoint: Endpoint }[] {
+  const found: { kind: "instructions" | "skills"; endpoint: Endpoint }[] = [];
+  for (const kind of ["instructions", "skills"] as const) {
+    const endpoint = harness[kind][scope];
+    if (!endpointVerified(endpoint)) found.push({ kind, endpoint });
+  }
+  return found;
 }
 
 const PI_SKILLS_DOC =
@@ -74,7 +93,6 @@ export const HARNESSES: Harness[] = [
       { native: false, alias: ".claude/skills" },
     ),
     source: CLAUDE_SKILLS_DOC,
-    verified: true,
   },
   {
     id: "codex",
@@ -89,7 +107,6 @@ export const HARNESSES: Harness[] = [
     // Codex's user-level skills directory is $HOME/.agents/skills: native both ways.
     skills: scopes(NATIVE, NATIVE),
     source: CODEX_SKILLS_DOC,
-    verified: true,
   },
   {
     id: "pi",
@@ -103,7 +120,6 @@ export const HARNESSES: Harness[] = [
     // Pi reads ~/.agents/skills and .agents/skills directly.
     skills: scopes(NATIVE, NATIVE),
     source: PI_SKILLS_DOC,
-    verified: true,
   },
   {
     id: "omp",
@@ -120,7 +136,6 @@ export const HARNESSES: Harness[] = [
       { native: false, alias: ".omp/agent/skills" },
     ),
     source: "https://github.com/can1357/oh-my-pi/blob/main/docs/config-usage.md",
-    verified: true,
   },
   {
     id: "copilot",
@@ -135,7 +150,6 @@ export const HARNESSES: Harness[] = [
     ),
     skills: scopes(NATIVE, NATIVE),
     source: `${COPILOT_SKILLS_DOC} · ${COPILOT_INSTRUCTIONS_DOC}`,
-    verified: true,
   },
   {
     id: "cursor",
@@ -144,14 +158,13 @@ export const HARNESSES: Harness[] = [
     configRoot: ".cursor",
     instructions: scopes(
       { native: true, note: "Cursor reads AGENTS.md" },
-      { native: false, alias: ".cursor/AGENTS.md", note: "not documented by Cursor" },
+      { native: false, alias: ".cursor/AGENTS.md", note: "not documented by Cursor", verified: false },
     ),
     skills: scopes(
-      { native: false, alias: ".cursor/skills" },
-      { native: false, alias: ".cursor/skills" },
+      { native: false, alias: ".cursor/skills", verified: false },
+      { native: false, alias: ".cursor/skills", verified: false },
     ),
     source: "https://cursor.com/docs/agent/context",
-    verified: false,
   },
   {
     id: "opencode",
@@ -163,11 +176,10 @@ export const HARNESSES: Harness[] = [
       { native: false, alias: ".config/opencode/AGENTS.md" },
     ),
     skills: scopes(
-      { native: false, alias: ".opencode/skills" },
-      { native: false, alias: ".config/opencode/skills" },
+      { native: false, alias: ".opencode/skills", verified: false },
+      { native: false, alias: ".config/opencode/skills", verified: false },
     ),
     source: "https://opencode.ai/docs/rules/",
-    verified: false,
   },
   {
     id: "qwen",
@@ -176,14 +188,13 @@ export const HARNESSES: Harness[] = [
     configRoot: ".qwen",
     instructions: scopes(
       { native: true, note: "QWEN.md is the legacy name" },
-      { native: false, alias: ".qwen/AGENTS.md", note: "not documented by Qwen" },
+      { native: false, alias: ".qwen/AGENTS.md", note: "not documented by Qwen", verified: false },
     ),
     skills: scopes(
       { native: false, alias: ".qwen/skills" },
       { native: false, alias: ".qwen/skills" },
     ),
     source: "https://qwenlm.github.io/qwen-code-docs/en/users/features/skills/",
-    verified: true,
   },
   {
     id: "kimi",
@@ -192,14 +203,13 @@ export const HARNESSES: Harness[] = [
     configRoot: ".kimi-code",
     instructions: scopes(
       { native: true },
-      { native: false, alias: ".kimi-code/AGENTS.md", note: "not documented by Kimi" },
+      { native: false, alias: ".kimi-code/AGENTS.md", note: "not documented by Kimi", verified: false },
     ),
     skills: scopes(
       { native: false, alias: ".kimi-code/skills" },
       NATIVE, // Kimi scans ~/.agents/skills as its "generic group"
     ),
     source: "https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html",
-    verified: true,
   },
   {
     id: "kilo",
@@ -212,11 +222,10 @@ export const HARNESSES: Harness[] = [
     ),
     // Kilo Code reads Claude Code's skills directory for compatibility.
     skills: scopes(
-      { native: false, alias: ".claude/skills", note: "shares Claude Code's directory" },
-      { native: false, alias: ".config/kilo/skills", note: "unconfirmed" },
+      { native: false, alias: ".claude/skills", note: "shares Claude Code's directory", verified: false },
+      { native: false, alias: ".config/kilo/skills", note: "unconfirmed", verified: false },
     ),
     source: "https://github.com/intellectronica/ruler#skills-support-experimental",
-    verified: false,
   },
   {
     id: "droid",
@@ -232,7 +241,6 @@ export const HARNESSES: Harness[] = [
       { native: false, alias: ".factory/skills" },
     ),
     source: "https://docs.factory.ai/harness/skills",
-    verified: true,
   },
   {
     id: "devin",
@@ -248,7 +256,6 @@ export const HARNESSES: Harness[] = [
       { native: false, alias: ".config/devin/skills" },
     ),
     source: "https://docs.devin.ai/cli/extensibility/rules",
-    verified: true,
   },
   {
     id: "mastracode",
@@ -257,13 +264,12 @@ export const HARNESSES: Harness[] = [
     configRoot: ".mastracode",
     instructions: scopes(
       { native: true },
-      { native: false, alias: ".mastracode/AGENTS.md", note: "not documented by Mastra" },
+      { native: false, alias: ".mastracode/AGENTS.md", note: "not documented by Mastra", verified: false },
     ),
     // Mastra Code lists .agents/skills as a project source and Agent Skills
     // spec compatibility, so both scopes are native.
     skills: scopes(NATIVE, NATIVE),
     source: "https://code.mastra.ai/configuration",
-    verified: true,
   },
   {
     id: "grok",
@@ -272,14 +278,13 @@ export const HARNESSES: Harness[] = [
     configRoot: ".grok",
     instructions: scopes(
       { native: true, note: "reads AGENTS.md, CLAUDE.md, AGENT.md" },
-      { native: false, alias: ".grok/AGENTS.md", note: "not documented by Grok" },
+      { native: false, alias: ".grok/AGENTS.md", note: "not documented by Grok", verified: false },
     ),
     skills: scopes(
       { native: false, alias: ".grok/skills" },
       { native: false, alias: ".grok/skills" },
     ),
     source: "https://docs.x.ai/docs/grok-cli/skills",
-    verified: true,
   },
   {
     id: "qoder",
@@ -288,14 +293,13 @@ export const HARNESSES: Harness[] = [
     configRoot: ".qoder",
     instructions: scopes(
       { native: true, note: "configurable via context.fileName" },
-      { native: false, alias: ".qoder/AGENTS.md", note: "not documented by Qoder" },
+      { native: false, alias: ".qoder/AGENTS.md", note: "not documented by Qoder", verified: false },
     ),
     skills: scopes(
       { native: false, alias: ".qoder/skills" },
       { native: false, alias: ".qoder/skills" },
     ),
     source: "https://docs.qoder.com/cli/Skills",
-    verified: true,
   },
   {
     id: "antigravity",
@@ -303,15 +307,14 @@ export const HARNESSES: Harness[] = [
     bins: ["agy", "antigravity"],
     configRoot: ".gemini/config",
     instructions: scopes(
-      { native: true, note: "Gemini-lineage discovery: AGENTS.md, CONTEXT.md, GEMINI.md" },
-      { native: false, alias: ".gemini/config/AGENTS.md", note: "unconfirmed" },
+      { native: true, note: "Gemini-lineage discovery: AGENTS.md, CONTEXT.md, GEMINI.md", verified: false },
+      { native: false, alias: ".gemini/config/AGENTS.md", note: "unconfirmed", verified: false },
     ),
     skills: scopes(
-      { native: false, alias: ".agent/skills", note: "unconfirmed" },
-      { native: false, alias: ".gemini/config/skills", note: "unconfirmed" },
+      { native: false, alias: ".agent/skills", note: "unconfirmed", verified: false },
+      { native: false, alias: ".gemini/config/skills", note: "unconfirmed", verified: false },
     ),
     source: "https://github.com/intellectronica/ruler#skills-support-experimental",
-    verified: false,
   },
   {
     id: "hermes",
@@ -319,15 +322,14 @@ export const HARNESSES: Harness[] = [
     bins: ["hermes"],
     configRoot: ".hermes",
     instructions: scopes(
-      { native: true, note: "unconfirmed" },
+      { native: true, note: "unconfirmed", verified: false },
       { native: false, alias: ".hermes/AGENTS.md", note: "unconfirmed" },
     ),
     skills: scopes(
-      { native: false, alias: ".hermes/skills", note: "unconfirmed" },
-      { native: false, alias: ".hermes/skills", note: "unconfirmed" },
+      { native: false, alias: ".hermes/skills", note: "unconfirmed", verified: false },
+      { native: false, alias: ".hermes/skills", note: "unconfirmed", verified: false },
     ),
     source: "https://herdr.dev/llms.txt",
-    verified: false,
   },
 ];
 

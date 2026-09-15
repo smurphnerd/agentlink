@@ -1,11 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "./link.js";
 import type { ScopePaths } from "./scope.js";
 
 export type IgnoreMode = "skills" | "all" | "none";
 
-const BEGIN = "# agentlink:begin";
-const END = "# agentlink:end";
+/** Matched as whole lines: a user comment like "# agentlink:beginning" is not our marker. */
+const BEGIN_LINE = /^# agentlink:begin\s*$/m;
+const END_LINE = /^# agentlink:end\s*$/m;
+const BLOCK = "# agentlink:begin";
 
 export const IGNORE_MODES: IgnoreMode[] = ["skills", "all", "none"];
 
@@ -33,8 +36,10 @@ export function ignoreEntries(
   return [...new Set(entries)].sort();
 }
 
+export type BlockStatus = "updated" | "unchanged" | "malformed";
+
 export interface IgnoreResult {
-  changed: boolean;
+  status: BlockStatus;
   file: string;
   entries: string[];
   skipped?: string;
@@ -51,14 +56,16 @@ export function updateGitignore(
 
   // Only touch a repository that actually tracks files here.
   if (paths.scope !== "project" || !existsSync(path.join(paths.root, ".git"))) {
-    return { changed: false, file, entries, skipped: "not a git repository" };
+    return { status: "unchanged", file, entries, skipped: "not a git repository" };
   }
 
   const before = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const after = applyIgnoreBlock(before, entries);
-  const changed = after !== before;
-  if (changed && !options.dryRun) writeFileSync(file, after, "utf8");
-  return { changed, file, entries };
+  const spliced = applyIgnoreBlock(before, entries);
+  if (spliced.status === "malformed") return { status: spliced.status, file, entries };
+
+  const changed = spliced.status === "updated";
+  if (changed && !options.dryRun) writeFileAtomic(file, spliced.text);
+  return { status: spliced.status, file, entries };
 }
 
 /** Remove the managed block, leaving the rest of .gitignore alone. */
@@ -66,45 +73,84 @@ export function removeIgnoreBlock(paths: ScopePaths, options: { dryRun?: boolean
   const file = path.join(paths.root, ".gitignore");
   if (!existsSync(file)) return false;
   const before = readFileSync(file, "utf8");
-  const after = applyIgnoreBlock(before, []);
-  if (after === before) return false;
-  if (!options.dryRun) writeFileSync(file, after, "utf8");
+  const spliced = applyIgnoreBlock(before, []);
+  if (spliced.status !== "updated" || spliced.text === before) return false;
+  if (!options.dryRun) writeFileAtomic(file, spliced.text);
   return true;
 }
 
 /** Read the entries currently inside the managed block. */
 export function readIgnoreBlock(paths: ScopePaths): string[] {
-  const file = path.join(paths.root, ".gitignore");
-  if (!existsSync(file)) return [];
-  const text = readFileSync(file, "utf8");
-  const start = text.indexOf(BEGIN);
-  if (start === -1) return [];
-  const end = text.indexOf(END, start);
-  if (end === -1) return [];
-  return text
-    .slice(start, end)
-    .split("\n")
-    .slice(1)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  const text = existsSync(path.join(paths.root, ".gitignore"))
+    ? readFileSync(path.join(paths.root, ".gitignore"), "utf8")
+    : "";
+  return blockSpan(text)?.entries ?? [];
 }
 
-export function applyIgnoreBlock(text: string, entries: string[]): string {
-  const start = text.indexOf(BEGIN);
-  const end = text.indexOf(END, start === -1 ? 0 : start);
-  const withoutBlock =
-    start === -1 || end === -1
-      ? text
-      : `${text.slice(0, start)}${text.slice(end + END.length)}`;
+interface Span {
+  start: number;
+  end: number;
+  entries: string[];
+}
 
-  // Normalise so repeated runs cannot accumulate blank lines either way.
-  const cleaned = withoutBlock
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+/, "")
-    .replace(/[ \t]*\n*$/, "");
+/** Locate the managed block by whole-line markers. Returns null when absent. */
+function blockSpan(text: string): Span | null {
+  const begin = BEGIN_LINE.exec(text);
+  if (!begin) return null;
+  const afterBegin = begin.index + begin[0].length;
+  const end = END_LINE.exec(text.slice(afterBegin));
+  if (!end) return null;
+  const endIndex = afterBegin + end.index;
+  const body = text.slice(afterBegin, endIndex);
+  return {
+    start: begin.index,
+    end: endIndex + end[0].length,
+    entries: body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#")),
+  };
+}
 
-  if (entries.length === 0) return cleaned === "" ? "" : `${cleaned}\n`;
+export interface SpliceResult {
+  text: string;
+  status: BlockStatus;
+}
 
-  const block = [BEGIN, ...entries, END].join("\n");
-  return cleaned === "" ? `${block}\n` : `${cleaned}\n\n${block}\n`;
+/**
+ * Insert, replace or remove the managed block.
+ *
+ * Text outside the block is never rewritten: no whitespace normalisation runs
+ * over the user's file. A lone marker is refused rather than guessed at, since
+ * anything after an unterminated block might be the user's own rules.
+ */
+export function applyIgnoreBlock(text: string, entries: string[]): SpliceResult {
+  const beginMatch = BEGIN_LINE.exec(text);
+  const endMatch = END_LINE.exec(text);
+  if (beginMatch && !endMatch) {
+    return { text, status: "malformed" };
+  }
+  if (!beginMatch && endMatch) {
+    return { text, status: "malformed" };
+  }
+
+  const span = beginMatch && endMatch ? blockSpan(text) : null;
+  const without = span ? `${text.slice(0, span.start)}${text.slice(span.end)}` : text;
+
+  if (entries.length === 0) {
+    if (!span) return { text, status: "unchanged" };
+    // Remove the blank line the block was separated by, but nothing else.
+    const trimmed = without.replace(/\n[ \t]*\n$/, "\n").replace(/\n$/, text.endsWith("\n") ? "\n" : "");
+    return { text: trimmed, status: "updated" };
+  }
+
+  const block = [BLOCK, ...entries, "# agentlink:end"].join("\n");
+  if (span) {
+    const next = `${without.slice(0, span.start)}${block}\n${without.slice(span.start).replace(/^\n/, "")}`;
+    return { text: next, status: next === text ? "unchanged" : "updated" };
+  }
+
+  const base = text.replace(/\s+$/, "");
+  const next = base === "" ? `${block}\n` : `${base}\n\n${block}\n`;
+  return { text: next, status: next === text ? "unchanged" : "updated" };
 }

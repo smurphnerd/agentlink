@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { hasClause, CLAUSE } from "./convention.js";
-import type { Harness } from "./harnesses.js";
+import { hasClause, CLAUSE, BEGIN_MARKER } from "./convention.js";
+import { endpointVerified, unverifiedEndpoints, type Harness } from "./harnesses.js";
 import { ignoreEntries, isIgnoreMode, readIgnoreBlock } from "./ignore.js";
 import { inspect, plan, readState } from "./link.js";
-import { listSubdirectories, type ScopePaths } from "./scope.js";
+import { listHiddenSubdirectories, listSubdirectories, type ScopePaths } from "./scope.js";
 
 export type Severity = "error" | "warn" | "info";
 
@@ -18,27 +18,32 @@ export interface SkillRecord {
   name: string;
   dir: string;
   frontmatter: { name?: string; description?: string };
+  hasDirectSkillFile: boolean;
+  hasNestedSkillFile: boolean;
 }
 
 export function readSkills(paths: ScopePaths): SkillRecord[] {
   return listSubdirectories(paths.skills).map((name) => {
     const dir = path.join(paths.skills, name);
-    const skillFile = findSkillFile(dir);
+    const direct = path.join(dir, "SKILL.md");
+    const hasDirectSkillFile = existsSync(direct);
     return {
       name,
       dir,
-      frontmatter: skillFile ? parseFrontmatter(readFileSync(skillFile, "utf8")) : {},
+      hasDirectSkillFile,
+      hasNestedSkillFile: !hasDirectSkillFile && findNestedSkillFile(dir, 1) !== undefined,
+      frontmatter: hasDirectSkillFile ? parseFrontmatter(readFileSync(direct, "utf8")) : {},
     };
   });
 }
 
-/** SKILL.md at the skill root, or one level down for grouping folders. */
-export function findSkillFile(dir: string, depth = 0): string | undefined {
+/** A SKILL.md in a subdirectory, which only some harnesses read. */
+export function findNestedSkillFile(dir: string, depth = 0): string | undefined {
   const direct = path.join(dir, "SKILL.md");
   if (existsSync(direct)) return direct;
   if (depth >= 2) return undefined;
   for (const child of listSubdirectories(dir)) {
-    const found = findSkillFile(path.join(dir, child), depth + 1);
+    const found = findNestedSkillFile(path.join(dir, child), depth + 1);
     if (found) return found;
   }
   return undefined;
@@ -60,14 +65,21 @@ export function parseFrontmatter(text: string): { name?: string; description?: s
 export interface DoctorInput {
   paths: ScopePaths;
   harnesses: Harness[];
-  home: string;
 }
 
+/**
+ * Report the problems a user can act on.
+ *
+ * Missing or misdirected links for a selected harness are errors, not warnings:
+ * the whole promise of the tool is that the harness reads what you wrote, and a
+ * repository that fails that should not pass a CI check.
+ */
 export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
   const findings: Finding[] = [];
 
   // --- the convention itself ------------------------------------------------
-  if (!existsSync(paths.instructions)) {
+  const instructionsExist = existsSync(paths.instructions);
+  if (!instructionsExist) {
     findings.push({
       severity: "error",
       message: `${label(paths, paths.instructions)} is missing`,
@@ -84,8 +96,8 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
     } else if (!text.includes(CLAUSE)) {
       findings.push({
         severity: "info",
-        message: `${path.basename(paths.instructions)} has an outdated agentlink clause`,
-        fix: "agentlink sync",
+        message: `${path.basename(paths.instructions)} has an outdated agentlink clause, or an unterminated one`,
+        fix: "agentlink sync, then check the section by hand",
       });
     }
   }
@@ -99,28 +111,58 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
   }
 
   // --- skills ---------------------------------------------------------------
-  const skills = readSkills(paths);
-  const rootMarkdown = safeReadDir(paths.skills).filter((name) => name.endsWith(".md"));
-  for (const file of rootMarkdown) {
+  for (const file of safeReadDir(paths.skills).filter((name) => name.endsWith(".md"))) {
     findings.push({
       severity: "warn",
       message: `${short(paths, path.join(paths.skills, file))} sits at the root of .agents/skills`,
-      fix: "move it into .agents/skills/<skill-name>/SKILL.md — root Markdown is ignored by the spec",
+      fix: "move it into .agents/skills/<skill-name>/SKILL.md — root Markdown is not a skill",
     });
   }
 
-  for (const skill of skills) {
-    const name = skill.frontmatter.name;
-    if (!existsSync(path.join(skill.dir, "SKILL.md"))) {
-      if (!skill.frontmatter.name) {
+  for (const hidden of listHiddenSubdirectories(paths.skills)) {
+    findings.push({
+      severity: "info",
+      message: `.agents/skills/${hidden} starts with a dot, so it is skipped`,
+      fix: "rename it without the dot to publish it as a skill",
+    });
+  }
+
+  for (const name of safeReadDir(paths.skills)) {
+    const entry = path.join(paths.skills, name);
+    if (name.startsWith(".") || name.endsWith(".md")) continue;
+    const kind = inspect(entry).kind;
+    if (kind === "symlink") {
+      const target = (inspect(entry) as { resolved?: string }).resolved;
+      if (!target || !existsSync(target)) {
         findings.push({
           severity: "error",
-          message: `.agents/skills/${skill.name} has no SKILL.md`,
-          fix: "add SKILL.md with `name` and `description` frontmatter",
+          message: `.agents/skills/${name} is a broken symlink`,
+          fix: "remove it or point it at a directory that exists",
         });
       }
       continue;
     }
+    if (kind === "error") {
+      findings.push({
+        severity: "error",
+        message: `.agents/skills/${name} cannot be read`,
+        fix: "check permissions on the path",
+      });
+    }
+  }
+
+  for (const skill of readSkills(paths)) {
+    if (!skill.hasDirectSkillFile) {
+      findings.push({
+        severity: "error",
+        message: skill.hasNestedSkillFile
+          ? `.agents/skills/${skill.name} has no SKILL.md directly inside, only nested ones — most harnesses will not find it`
+          : `.agents/skills/${skill.name} has no SKILL.md`,
+        fix: "put SKILL.md at .agents/skills/<skill-name>/SKILL.md",
+      });
+      continue;
+    }
+    const name = skill.frontmatter.name;
     if (!name) {
       findings.push({
         severity: "error",
@@ -133,7 +175,7 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
       findings.push({
         severity: "warn",
         message: `.agents/skills/${skill.name} declares name \`${name}\``,
-        fix: "keep the directory name and frontmatter name identical so other harnesses resolve it",
+        fix: "keep the directory name and frontmatter name identical so every harness resolves it",
       });
     }
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name) || name.length > 64) {
@@ -157,47 +199,46 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
     const existing = inspect(op.target);
     if (existing.kind === "missing") {
       findings.push({
-        severity: "warn",
+        severity: "error",
         message: `${short(paths, op.target)} is not linked (${op.harnessIds.join(", ")})`,
         fix: "agentlink sync",
       });
     } else if (existing.kind === "symlink" && existing.resolved !== op.source) {
       findings.push({
-        severity: "warn",
+        severity: "error",
         message: `${short(paths, op.target)} points at ${short(paths, existing.resolved ?? "")}`,
         fix: "agentlink sync",
       });
     } else if (existing.kind === "file" || existing.kind === "dir") {
-      // A real copy where a link belongs: duplicates drift apart.
       if (op.kind === "instructions") {
         findings.push({
           severity: "error",
-          message: `${short(paths, op.target)} is a real file, not a symlink — two copies of your instructions`,
-          fix: "agentlink adopt  (renames it to AGENTS.md and links back)",
+          message: `${short(paths, op.target)} is a real ${existing.kind}, not a symlink — two copies of your instructions`,
+          fix: "agentlink adopt  (moves it to AGENTS.md and links back)",
         });
-      } else if (directoryHasContent(op.target)) {
+      } else {
+        // Reported even when empty: an empty directory still blocks the link.
         findings.push({
-          severity: "warn",
-          message: `${short(paths, op.target)} is a real copy of skill \`${op.skill}\``,
-          fix: `agentlink fix  (moves or removes it; the canonical copy is .agents/skills/${op.skill})`,
+          severity: "error",
+          message: `${short(paths, op.target)} is a real ${existing.kind} instead of a link to skill \`${op.skill}\``,
+          fix: `agentlink fix  (the canonical copy is .agents/skills/${op.skill})`,
         });
       }
     }
   }
 
+  // --- honesty about the table ---------------------------------------------
   for (const harness of harnesses) {
-    if (!harness.verified) {
-      const scopesForHarness = [harness.instructions[paths.scope], harness.skills[paths.scope]];
-      if (scopesForHarness.some((endpoint) => endpoint.alias)) {
-        findings.push({
-          severity: "info",
-          message: `${harness.label}: link paths are unverified — see ${harness.source}`,
-        });
-      }
+    for (const { kind, endpoint } of unverifiedEndpoints(harness, paths.scope)) {
+      const where = endpoint.native ? "native path" : endpoint.alias;
+      findings.push({
+        severity: "info",
+        message: `${harness.label}: ${kind} ${where} is not confirmed by ${harness.source}`,
+      });
     }
   }
 
-  // Unignored links turn up as untracked files in every `git status`.
+  // --- gitignore ------------------------------------------------------------
   const state = readState(paths);
   const mode = isIgnoreMode(state.ignore) ? state.ignore : "skills";
   if (paths.scope === "project" && existsSync(path.join(paths.root, ".git")) && mode !== "none") {
@@ -216,25 +257,7 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
     }
   }
 
-  const stale = desired.skips.filter((skip) => skip.reason.startsWith("AGENTS.md does not exist"));
-  for (const skip of stale) {
-    if (existsSync(path.join(paths.root, skip.rel))) {
-      findings.push({
-        severity: "info",
-        message: `${short(paths, path.join(paths.root, skip.rel))} exists but AGENTS.md does not`,
-      });
-    }
-  }
-
   return findings;
-}
-
-function directoryHasContent(dir: string): boolean {
-  try {
-    return readdirSync(dir).length > 0;
-  } catch {
-    return false;
-  }
 }
 
 function safeReadDir(dir: string): string[] {
@@ -252,3 +275,5 @@ function short(paths: ScopePaths, absolute: string): string {
 function label(paths: ScopePaths, absolute: string): string {
   return path.join(paths.scope === "global" ? "~" : ".", short(paths, absolute));
 }
+
+export { statSync, BEGIN_MARKER };

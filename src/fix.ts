@@ -1,21 +1,20 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
-  rmdirSync,
 } from "node:fs";
 import path from "node:path";
 import type { Harness } from "./harnesses.js";
-import { inspect } from "./link.js";
+import { inspect, isOwned, isInside, pruneEmptyParents } from "./link.js";
 import { listSubdirectories, relativeTo, type ScopePaths } from "./scope.js";
 
-export type FixKind = "move" | "remove-identical" | "conflict" | "already-linked";
+export type FixKind = "move" | "remove-identical" | "conflict";
 
 export interface FixAction {
   /** Path relative to the scope root, inside a harness directory. */
@@ -40,19 +39,24 @@ export function planFixes(paths: ScopePaths, harnesses: Harness[]): FixAction[] 
   const seen = new Set<string>();
 
   for (const harness of harnesses) {
-    // Skills: scan the harness directory itself, since an orphan copy exists
-    // precisely when the canonical tree has nothing at that name.
     const skills = harness.skills[paths.scope];
     if (!skills.native && skills.alias) {
       const dir = path.join(paths.root, skills.alias);
+      // A harness directory that is itself a symlink into the canonical tree
+      // would make every entry look like an identical duplicate of itself.
+      // Acting on that would delete the canonical skills.
+      if (isInsideCanonical(paths, dir)) continue;
+
       for (const name of listSubdirectories(dir)) {
         const target = path.join(dir, name);
         const rel = relativeTo(paths.root, target);
         if (seen.has(rel)) continue;
         seen.add(rel);
 
-        // Symlinks are already correct; inspect() reports them separately.
-        if (inspect(target).kind !== "dir" && inspect(target).kind !== "file") continue;
+        // Only real directories are copies. Symlinks are already correct, and
+        // a symlinked directory is resolved through, never replaced.
+        if (inspect(target).kind !== "dir") continue;
+        if (isInsideCanonical(paths, target)) continue;
 
         const source = path.join(paths.skills, name);
         const canonical = relativeTo(paths.root, source);
@@ -66,12 +70,13 @@ export function planFixes(paths: ScopePaths, harnesses: Harness[]): FixAction[] 
       }
     }
 
-    // Instructions: a real file where a symlink belongs needs a human merge.
+    // Instructions: a real file or directory where a symlink belongs needs a human.
     const instructions = harness.instructions[paths.scope];
     if (!instructions.native && instructions.alias && existsSync(paths.instructions)) {
       const target = path.join(paths.root, instructions.alias);
       const rel = relativeTo(paths.root, target);
-      if (!seen.has(rel) && inspect(target).kind === "file") {
+      const kind = inspect(target).kind;
+      if (!seen.has(rel) && (kind === "file" || kind === "dir")) {
         seen.add(rel);
         actions.push({
           target: rel,
@@ -86,6 +91,31 @@ export function planFixes(paths: ScopePaths, harnesses: Harness[]): FixAction[] 
   return actions;
 }
 
+/** True when `candidate` is the canonical skills tree, or inside it. */
+function isInsideCanonical(paths: ScopePaths, candidate: string): boolean {
+  if (!existsSync(candidate)) return false;
+  let real: string;
+  try {
+    real = realpathSync(candidate);
+  } catch {
+    return false;
+  }
+  let skillsReal: string;
+  try {
+    skillsReal = realpathSync(paths.skills);
+  } catch {
+    return false;
+  }
+  if (isInside(skillsReal, real)) return true;
+  try {
+    // Resolving the parent catches a canonical entry that is itself a symlink
+    // into .agents, which realpath already collapsed above.
+    return isInside(realpathSync(paths.agentsDir), real);
+  } catch {
+    return false;
+  }
+}
+
 export interface FixResult extends FixAction {
   performed: boolean;
 }
@@ -97,25 +127,30 @@ export function applyFixes(
 ): FixResult[] {
   return actions.map((action) => {
     if (action.kind === "conflict" && !options.force) return { ...action, performed: false };
-    if (options.dryRun) return { ...action, performed: false };
 
     const target = path.join(paths.root, action.target);
     const canonical = path.join(paths.root, action.canonical);
 
-    if (action.kind === "move") {
-      mkdirSync(path.dirname(canonical), { recursive: true });
-      renameSync(target, canonical);
+    // Never touch anything that is not inside the scope root, and never touch
+    // the canonical tree itself.
+    if (!isInside(paths.root, target) || isOwned(paths, target)) {
+      return { ...action, performed: false, detail: "refused: outside the scope root" };
+    }
+    if (options.dryRun) return { ...action, performed: false };
+
+    try {
+      if (action.kind === "move") {
+        mkdirSync(path.dirname(canonical), { recursive: true });
+        renameSync(target, canonical);
+      } else {
+        rmSync(target, { recursive: true, force: true });
+      }
       pruneEmptyParents(path.dirname(target), paths.root);
       return { ...action, performed: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ...action, performed: false, detail: `failed: ${message}` };
     }
-
-    if (action.kind === "remove-identical" || action.kind === "conflict") {
-      rmSync(target, { recursive: true, force: true });
-      pruneEmptyParents(path.dirname(target), paths.root);
-      return { ...action, performed: true };
-    }
-
-    return { ...action, performed: false };
   });
 }
 
@@ -130,7 +165,9 @@ function walk(current: string, prefix: string, hash: ReturnType<typeof createHas
   let entries;
   try {
     entries = readdirSync(current, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    // An unreadable directory must not look like an empty one.
+    hash.update(`unreadable ${prefix} ${(error as NodeJS.ErrnoException)?.code ?? "?"}\n`);
     return;
   }
   for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
@@ -155,8 +192,11 @@ function hashFile(file: string): string {
     const isBinary = buffer.includes(0);
     const content = isBinary ? buffer : Buffer.from(buffer.toString("utf8").replace(/\r\n/g, "\n"));
     return createHash("sha256").update(content).digest("hex");
-  } catch {
-    return "unreadable";
+  } catch (error) {
+    // A constant sentinel would make two different unreadable files compare
+    // equal, which would pick "identical" and delete one of them.
+    const code = (error as NodeJS.ErrnoException)?.code ?? "?";
+    return `unreadable:${code}:${Buffer.from(file).toString("base64")}`;
   }
 }
 
@@ -167,17 +207,3 @@ function safeReadlink(file: string): string {
     return "?";
   }
 }
-
-function pruneEmptyParents(dir: string, root: string): void {
-  let current = dir;
-  while (current !== root && current.startsWith(`${root}${path.sep}`)) {
-    try {
-      rmdirSync(current);
-    } catch {
-      return;
-    }
-    current = path.dirname(current);
-  }
-}
-
-export { lstatSync };
