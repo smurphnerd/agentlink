@@ -414,13 +414,21 @@ function describe(endpoint: { native: boolean; alias?: string }): string {
 
 function runDoctor(paths: ScopePaths, options: Options): void {
   const state = readState(paths);
-  // Before the first sync there is no recorded selection; diagnostics are still
-  // useful for every harness actually present on the machine.
-  const chosen = state.harnesses.length
-    ? HARNESSES.filter((h) => state.harnesses.includes(h.id))
-    : detectAll()
-        .filter((detection) => detection.installed)
-        .map((detection) => detection.harness);
+  // An explicit selection wins, so a CI runner with no harnesses installed can
+  // still check the set a repository declares. Otherwise fall back to what was
+  // recorded, then to what is present on this machine.
+  let chosen: Harness[];
+  if (options.harnessIds && options.harnessIds.length > 0) {
+    const { found, unknown } = resolveHarnessList(options.harnessIds.join(","));
+    if (unknown.length) fail(`unknown harness${unknown.length > 1 ? "es" : ""}: ${unknown.join(", ")}`);
+    chosen = dedupe(found);
+  } else if (state.harnesses.length > 0) {
+    chosen = HARNESSES.filter((h) => state.harnesses.includes(h.id));
+  } else {
+    chosen = detectAll()
+      .filter((detection) => detection.installed)
+      .map((detection) => detection.harness);
+  }
   const findings = diagnose({ paths, harnesses: chosen });
   const errors = findings.filter((f) => f.severity === "error").length;
   const warns = findings.filter((f) => f.severity === "warn").length;
@@ -601,6 +609,7 @@ ${BOLD}usage${RESET}
   agentlink select               change which harnesses are linked
   agentlink list                 show every harness and where it reads from
   agentlink doctor               report drift, duplicates and broken links
+  agentlink doctor --harnesses a,b   check a declared set (useful in CI)
   agentlink adopt                move an existing CLAUDE.md/GEMINI.md into AGENTS.md
   agentlink unlink               remove the links agentlink created
 

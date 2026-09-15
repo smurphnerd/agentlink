@@ -121,7 +121,7 @@ test("conflicting instructions are reported, not overwritten", () => {
   const root = repo();
   writeFileSync(path.join(root, "AGENTS.md"), "# Canonical\n");
   writeFileSync(path.join(root, "CLAUDE.md"), "# Different\n");
-  const { code, out } = run(["doctor"], root);
+  const { code, out } = run(["doctor", "--harnesses", "claude"], root);
   assert.match(out, /real file, not a symlink|two copies/);
   assert.equal(readFileSync(path.join(root, "CLAUDE.md"), "utf8"), "# Different\n");
   assert.ok(code >= 0);

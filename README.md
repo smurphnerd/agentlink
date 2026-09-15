@@ -99,6 +99,16 @@ To git, a symlink is an ordinary tracked file. Nothing is ignored by default, so
 
 One caveat about committing the aliases. Git checks symlinks out as plain text files when `core.symlinks` is false, which is how Git for Windows behaves until symlink support is enabled. A teammate there gets a `CLAUDE.md` whose contents are the string `AGENTS.md`. Teams with Windows checkouts should use `--ignore=all` and run `sync` after cloning.
 
+## CI
+
+`doctor` exits non-zero when it finds a problem, so a repository that has adopted the convention can check itself:
+
+```yaml
+- run: npx agentlink doctor
+```
+
+The selection comes from `.agents/agentlink.json`, which is committed, so this works on a runner with no harnesses installed. `doctor --harnesses a,b` checks a declared set without depending on that file. With no selection and nothing installed there is nothing to check, and `doctor` says so instead of reporting a pass.
+
 ## Safety
 
 None of this is done by overwriting.
@@ -137,8 +147,10 @@ Zero runtime dependencies. `npm run build` runs `tsc` into `dist/`.
 ## Tests
 
 ```bash
-npm test     # tsc, then node --test over test/
+npm test     # tsc, then node --test
 ```
+
+Runs on Node 20, 22, 24 and 26, which CI checks. Bare `node --test` rather than `node --test test/`: the directory form resolves differently from Node 22 onward and fails.
 
 No test framework. The suite covers the path table invariants, symlink planning and repair, the `.gitignore` block, the AGENTS.md clause, duplicate migration, and the CLI run end to end in throwaway git repositories.
 

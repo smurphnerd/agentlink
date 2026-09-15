@@ -18,4 +18,4 @@ First release.
   convention without a human explaining it.
 - A marked `.gitignore` block: instructions aliases are committed, skill links
   are ignored. `--ignore=skills|all|none`.
-- Zero runtime dependencies, 42 tests.
+- Zero runtime dependencies, 59 tests, verified on Node 20, 22, 24 and 26.

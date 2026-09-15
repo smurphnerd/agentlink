@@ -77,6 +77,17 @@ export interface DoctorInput {
 export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
   const findings: Finding[] = [];
 
+  // With nothing selected there are no links to check. Say so, rather than
+  // reporting a clean bill of health that was never actually earned: a CI
+  // runner has no harnesses installed, so this is reachable on every run.
+  if (harnesses.length === 0) {
+    findings.push({
+      severity: "warn",
+      message: "no harnesses are selected or installed, so only the convention was checked",
+      fix: "agentlink init, or pass --harnesses to check a specific set",
+    });
+  }
+
   // --- the convention itself ------------------------------------------------
   const instructionsExist = existsSync(paths.instructions);
   if (!instructionsExist) {
@@ -240,8 +251,7 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
 
   // --- gitignore ------------------------------------------------------------
   const state = readState(paths);
-  const mode = isIgnoreMode(state.ignore) ? state.ignore : "skills";
-  if (paths.scope === "project" && existsSync(path.join(paths.root, ".git")) && mode !== "none") {
+  const mode = isIgnoreMode(state.ignore) ? state.ignore : "skills";  if (paths.scope === "project" && existsSync(path.join(paths.root, ".git")) && mode !== "none") {
     const expected = ignoreEntries(mode, {
       skillDirs: [...new Set(desired.ops.filter((op) => op.kind === "skill").map((op) => path.posix.dirname(op.rel)))],
       instructionFiles: [...new Set(desired.ops.filter((op) => op.kind === "instructions").map((op) => op.rel))],

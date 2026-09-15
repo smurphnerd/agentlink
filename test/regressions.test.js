@@ -38,6 +38,11 @@ function run(args, cwd, env = {}) {
   return { code: result.status, out: result.stdout ?? "", err: result.stderr ?? "" };
 }
 
+/** An environment with no harnesses installed and no home config. */
+function emptyEnvironment() {
+  return { HOME: mkdtempSync(path.join(tmpdir(), "agentlink-nohome-")), PATH: "/nonexistent" };
+}
+
 const harness = (id) => {
   const found = HARNESSES.find((h) => h.id === id);
   assert.ok(found, `unknown harness ${id}`);
@@ -297,5 +302,24 @@ test("a conflict exits non-zero so CI can catch it", () => {
   const { code } = run(["init", "--harnesses", "claude", "--yes"], root);
   assert.notEqual(code, 0, "unresolved conflict fails the command");
   assert.equal(readFileSync(path.join(root, "CLAUDE.md"), "utf8"), "# Different\n");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("finding 15: doctor with nothing selected says so instead of passing silently", () => {
+  // A CI runner has no harnesses installed. Without a selection there are no
+  // links to check, and reporting that as clean would be a false pass.
+  const root = repo(["demo"]);
+  writeFileSync(path.join(root, "AGENTS.md"), "# Instructions\n");
+
+  // Detection reads PATH and HOME, so both have to be empty for this to be
+  // the CI environment rather than this developer's laptop.
+  const bare = run(["doctor"], root, emptyEnvironment());
+  assert.match(bare.out, /no harnesses are selected or installed/);
+  assert.equal(bare.code, 0, "a warning, not a failure: the repo may be mid-adoption");
+
+  // An explicit selection works with no harness installed at all.
+  const explicit = run(["doctor", "--harnesses", "claude"], root, emptyEnvironment());
+  assert.notEqual(explicit.code, 0, "the declared set is really checked");
+  assert.match(explicit.out, /is not linked/);
   rmSync(root, { recursive: true, force: true });
 });
