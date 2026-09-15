@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { upsertClause } from "../dist/convention.js";
+import { clauseFor, upsertClause, BEGIN_MARKER } from "../dist/convention.js";
 import { planFixes, applyFixes } from "../dist/fix.js";
 import { HARNESSES } from "../dist/harnesses.js";
 import { endpointVerified, unverifiedEndpoints } from "../dist/harnesses.js";
@@ -191,8 +191,9 @@ test("finding 8: a failing op is reported, not thrown, and state is still writte
   // .claude as a regular file makes every .claude/* link impossible.
   writeFileSync(path.join(root, ".claude"), "not a directory\n");
   const { code, out } = run(["init", "--harnesses", "claude", "--yes"], root);
-  assert.equal(code, 0, "one bad op does not abort the run");
+  assert.notEqual(code, 0, "the blocked link is reported as a failure");
   assert.match(out, /cannot inspect|skipped|blocked/);
+  assert.ok(!/^\s*at .*cli\.js/m.test(out), "it reported, it did not crash");
 
   const state = readState(resolveScope("project", root));
   assert.ok(Array.isArray(state.links));
@@ -322,4 +323,39 @@ test("finding 15: doctor with nothing selected says so instead of passing silent
   assert.notEqual(explicit.code, 0, "the declared set is really checked");
   assert.match(explicit.out, /is not linked/);
   rmSync(root, { recursive: true, force: true });
+});
+
+test("finding 16: the global clause does not claim to describe a repository", () => {
+  const globalClause = clauseFor("global");
+  const projectClause = clauseFor("project");
+  assert.match(projectClause, /This repository keeps exactly one copy/);
+  assert.ok(!globalClause.includes("This repository"), "a global file loads in every project");
+  assert.match(globalClause, /user-level instructions file/);
+  assert.match(globalClause, /~\/\.agents\/skills/);
+
+  // Both use the same markers, so switching scope replaces rather than appends.
+  const seeded = upsertClause("# Global\n", "global");
+  const swapped = upsertClause(seeded.text, "project");
+  assert.equal(swapped.action, "updated");
+  assert.equal(swapped.text.split(BEGIN_MARKER).length - 1, 1);
+});
+
+test("finding 17: content standing in the way fails the run, a missing source does not", () => {
+  // A real file where a link belongs: someone has to decide, so exit non-zero.
+  const blocked = repo(["demo"]);
+  writeFileSync(path.join(blocked, "AGENTS.md"), "# Instructions\n");
+  mkdirSync(path.join(blocked, ".claude", "skills", "demo"), { recursive: true });
+  const conflict = run(["sync", "--harnesses", "claude", "--yes"], blocked);
+  assert.notEqual(conflict.code, 0, "a real directory in the way is a decision, not a no-op");
+  assert.match(conflict.out, /real directory sits here/);
+
+  // Nothing to link yet is not a failure.
+  const premature = repo(["demo"]);
+  rmSync(path.join(premature, "AGENTS.md"));
+  const nothing = run(["sync", "--harnesses", "claude", "--yes"], premature);
+  assert.equal(nothing.code, 0, "no AGENTS.md yet is not an error");
+  assert.match(nothing.out, /AGENTS\.md does not exist/);
+
+  rmSync(blocked, { recursive: true, force: true });
+  rmSync(premature, { recursive: true, force: true });
 });

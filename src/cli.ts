@@ -191,10 +191,22 @@ function migrateDuplicates(paths: ScopePaths, chosen: Harness[], options: Option
 
   for (const result of results) {
     const dry = options.dryRun ? ` ${DIM}(dry run)${RESET}` : "";
-    if (result.kind === "move" && result.performed) {
-      step("move", `${result.target} → ${result.canonical}${dry}`);
-    } else if (result.kind === "remove-identical" && result.performed) {
-      step("cleanup", `${result.target} ${DIM}identical to the canonical copy${RESET}${dry}`);
+    if (result.kind === "move" || result.kind === "remove-identical") {
+      if (!result.performed && !options.dryRun) {
+        // Refused or failed: say so rather than reporting a clean run.
+        process.stdout.write(
+          `  ${YELLOW}!${RESET} ${result.target} ${DIM}${result.detail ?? "not migrated"}${RESET}\n`,
+        );
+        continue;
+      }
+      if (result.kind === "move") {
+        step(options.dryRun ? "would" : "move", `${result.target} → ${result.canonical}${dry}`);
+      } else {
+        step(
+          options.dryRun ? "would" : "cleanup",
+          `${result.target} ${DIM}identical to the canonical copy${RESET}${dry}`,
+        );
+      }
     } else if (result.kind === "conflict") {
       const command = result.skill ? "diff -r" : "diff";
       process.stdout.write(
@@ -255,6 +267,11 @@ async function syncLinks(
 
   const conflicts = (context.fixes ?? []).filter((fix) => fix.kind === "conflict" && !fix.performed);
   const blocked = results.filter((result) => result.state === "skipped");
+  // Anything skipped here is real content standing where a link belongs, or a
+  // path we could not even inspect. Either way it needs a human decision, so the
+  // run reports failure. Links that are merely premature (no AGENTS.md yet) are
+  // plan shims, not results, and stay quiet.
+  const unresolved = blocked.length > 0 || conflicts.length > 0;
 
   if (options.json) {
     process.stdout.write(
@@ -295,7 +312,7 @@ async function syncLinks(
         2,
       )}\n`,
     );
-    if (conflicts.length > 0) process.exit(1);
+    if (unresolved) process.exit(1);
     return;
   }
 
@@ -367,7 +384,7 @@ async function syncLinks(
   } else if (linkPlan.skillsFound.length === 0) {
     process.stdout.write(`  ${DIM}no skills yet — add one at .agents/skills/<name>/SKILL.md${RESET}\n`);
   }
-  if (conflicts.length > 0) process.exit(1);
+  if (unresolved) process.exit(1);
 }
 
 async function runList(paths: ScopePaths, options: Options): Promise<void> {

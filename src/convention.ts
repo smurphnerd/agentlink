@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "./link.js";
-import type { ScopePaths } from "./scope.js";
+import type { ScopePaths, Scope } from "./scope.js";
 
 export const BEGIN_MARKER = "<!-- agentlink:begin v1 -->";
 export const END_MARKER = "<!-- agentlink:end -->";
@@ -10,14 +10,7 @@ export const END_MARKER = "<!-- agentlink:end -->";
 const BEGIN_LINE = /^<!-- agentlink:begin v1 -->[ \t]*$/m;
 const END_LINE = /^<!-- agentlink:end -->[ \t]*$/m;
 
-/**
- * The clause agentlink appends to AGENTS.md.
- *
- * Its job is to tell a *future agent* — one that has never heard of agentlink —
- * where documentation and skills belong and how to name them, so the convention
- * survives without a human enforcing it.
- */
-export const CLAUSE = `${BEGIN_MARKER}
+const PROJECT_CLAUSE = `${BEGIN_MARKER}
 ## Agent docs and skills: one source of truth
 
 This repository keeps exactly one copy of every agent instruction file and skill.
@@ -38,6 +31,41 @@ file next to one — edit or create the source it points to.
   so every harness picks up the change.
 ${END_MARKER}`;
 
+const GLOBAL_CLAUSE = `${BEGIN_MARKER}
+## Personal agent setup
+
+This is your user-level instructions file, loaded by every session regardless of
+project. Personal skills live once, in \`~/.agents/skills/<skill-name>/SKILL.md\`.
+Paths such as \`~/.claude/CLAUDE.md\` and \`~/.claude/skills/\` are symlinks
+maintained by \`agentlink\`; never edit a symlink, and never create a file or
+skill directory next to one.
+
+A project that carries its own \`AGENTS.md\` and \`.agents/skills/\` takes
+precedence over anything here, so keep this file to preferences that apply
+everywhere: how you like work done, what to ask before doing, personal tooling.
+
+- **Naming**: skill directory and frontmatter \`name\` are the same
+  lowercase-hyphenated string, 1-64 characters.
+- **After adding, renaming, or moving a personal skill**, run
+  \`npx agentlink sync --global\`.
+${END_MARKER}`;
+
+/**
+ * The clause agentlink appends to AGENTS.md.
+ *
+ * Its job is to tell a *future agent* — one that has never heard of agentlink —
+ * where documentation and skills belong and how to name them, so the convention
+ * survives without a human enforcing it. The text differs by scope because a
+ * global file is loaded in every project, including ones that do not use this
+ * convention, so it must not claim anything about "this repository".
+ */
+export function clauseFor(scope: Scope): string {
+  return scope === "global" ? GLOBAL_CLAUSE : PROJECT_CLAUSE;
+}
+
+/** The repository-scope clause, kept as a named export for documentation. */
+export const CLAUSE = PROJECT_CLAUSE;
+
 export type ClauseAction = "inserted" | "updated" | "unchanged" | "malformed";
 
 export interface ClauseResult {
@@ -56,7 +84,11 @@ export function hasClause(text: string): boolean {
  * A lone marker is left untouched: the text after an unterminated block might be
  * the user's own prose, and guessing would delete it.
  */
-export function upsertClause(text: string): { text: string; changed: boolean; action: ClauseAction } {
+export function upsertClause(
+  text: string,
+  scope: Scope = "project",
+): { text: string; changed: boolean; action: ClauseAction } {
+  const clause = clauseFor(scope);
   const begin = BEGIN_LINE.exec(text);
   const end = END_LINE.exec(text);
   if (begin && !end) return { text, changed: false, action: "malformed" };
@@ -65,14 +97,14 @@ export function upsertClause(text: string): { text: string; changed: boolean; ac
   if (begin && end) {
     const endIndex = end.index;
     const existing = text.slice(begin.index, endIndex + end[0].length);
-    if (existing === CLAUSE) return { text, changed: false, action: "unchanged" };
-    const next = `${text.slice(0, begin.index)}${CLAUSE}${text.slice(endIndex + end[0].length)}`;
+    if (existing === clause) return { text, changed: false, action: "unchanged" };
+    const next = `${text.slice(0, begin.index)}${clause}${text.slice(endIndex + end[0].length)}`;
     return { text: next, changed: true, action: "updated" };
   }
 
   const trimmed = text.replace(/\s+$/, "");
   const separator = trimmed.length === 0 ? "" : "\n\n";
-  return { text: `${trimmed}${separator}${CLAUSE}\n`, changed: true, action: "inserted" };
+  return { text: `${trimmed}${separator}${clause}\n`, changed: true, action: "inserted" };
 }
 
 export function ensureClause(
@@ -83,7 +115,7 @@ export function ensureClause(
   if (!existsSync(file)) return { changed: false, action: "unchanged", file };
 
   const before = readFileSync(file, "utf8");
-  const { text, changed, action } = upsertClause(before);
+  const { text, changed, action } = upsertClause(before, paths.scope);
   if (changed && !options.dryRun) writeFileAtomic(file, text);
   return { changed, action, file };
 }
@@ -97,9 +129,13 @@ export function initConvention(
   if (createdFile && !options.dryRun) {
     const title = path.basename(paths.root) || "project";
     const heading = paths.scope === "global" ? "Global agent instructions" : title;
+    const body =
+      paths.scope === "global"
+        ? "<!-- Preferences that apply in every project. Project AGENTS.md files take precedence. -->"
+        : "<!-- One or two sentences: what this is, who it is for. -->";
     writeFileAtomic(
       paths.instructions,
-      `# ${heading}\n\n<!-- One or two sentences: what this is, who it is for. -->\n\n## How to work\n\n<!-- Build, test and review commands; conventions that apply everywhere. -->\n\n${CLAUSE}\n`,
+      `# ${heading}\n\n${body}\n\n${clauseFor(paths.scope)}\n`,
     );
   } else if (!options.dryRun) {
     ensureClause(paths, options);

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { hasClause, CLAUSE, BEGIN_MARKER } from "./convention.js";
+import { clauseFor, hasClause, BEGIN_MARKER } from "./convention.js";
 import { endpointVerified, unverifiedEndpoints, type Harness } from "./harnesses.js";
 import { ignoreEntries, isIgnoreMode, readIgnoreBlock } from "./ignore.js";
 import { inspect, plan, readState } from "./link.js";
@@ -104,7 +104,7 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
         message: `${path.basename(paths.instructions)} does not explain the convention to agents`,
         fix: "agentlink sync  (appends the agentlink clause)",
       });
-    } else if (!text.includes(CLAUSE)) {
+    } else if (!text.includes(clauseFor(paths.scope))) {
       findings.push({
         severity: "info",
         message: `${path.basename(paths.instructions)} has an outdated agentlink clause, or an unterminated one`,
