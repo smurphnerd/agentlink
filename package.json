@@ -39,8 +39,8 @@
     "build": "tsc",
     "prepare": "tsc",
     "dev": "node --experimental-strip-types src/cli.ts",
-    "test": "npm run build && node --test test/",
-    "test:unit": "node --test test/",
+    "test": "npm run build && node --test",
+    "test:unit": "node --test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm test"
   },
