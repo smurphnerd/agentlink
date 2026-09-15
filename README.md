@@ -76,6 +76,24 @@ Rows marked unverified come from third-party path tables or could not be confirm
 
 Each harness gets a link from its own home-directory file, for example `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`. Harnesses that already read `~/.agents/skills/` get nothing, which is the point of the convention: the standard path is the one with the real files.
 
+## Git
+
+To git, a symlink is an ordinary tracked file. Nothing is ignored by default, so `agentlink` writes the rules for the paths it creates into a marked block in `.gitignore`. The default split is the one repositories already converge on, including langfuse, which commits `CLAUDE.md` as a symlink and ignores `.claude/skills/`.
+
+- Instructions aliases (`CLAUDE.md`, `.codex/AGENTS.md`) are committed. They are one small file, and they are what makes a fresh clone work for a teammate on a different harness.
+- Skill links are ignored. They are derived from `.agents/skills/` and multiply with every skill and harness, and their parent directories hold machine-local harness state.
+
+`--ignore=all` ignores both, for a repository where everyone runs `agentlink sync` after cloning. `--ignore=none` leaves `.gitignore` alone. The choice is stored in `.agents/agentlink.json`, so later runs keep it. `agentlink unlink` removes the block and leaves the rest of `.gitignore` untouched.
+
+```gitignore
+# agentlink:begin
+.claude/skills/
+.cursor/skills/
+# agentlink:end
+```
+
+One caveat about committing the aliases. Git checks symlinks out as plain text files when `core.symlinks` is false, which is how Git for Windows behaves until symlink support is enabled. A teammate there gets a `CLAUDE.md` whose contents are the string `AGENTS.md`. Teams with Windows checkouts should use `--ignore=all` and run `sync` after cloning.
+
 ## Safety
 
 None of this is done by overwriting.

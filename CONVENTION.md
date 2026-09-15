@@ -25,8 +25,11 @@ Links point at these, for example `CLAUDE.md -> AGENTS.md` and `.claude/skills/r
 5. Never edit a file that is a symlink, and never create a sibling next to one. Edit the file it points at.
 6. Documentation that is not a skill goes under `.agents/`, or in an `AGENTS.md` inside the subdirectory it applies to.
 7. Run `agentlink sync` after adding, renaming, or moving a skill or doc.
+8. Harness instruction aliases are committed to git. Skill links are listed in `.gitignore` inside a block marked `# agentlink:begin`, which `agentlink sync` owns. Do not edit the block by hand.
 
 Rules 1 to 7 are format requirements, not preferences. Harnesses fail silently when they are broken: a skill whose name disagrees with its directory loads in some tools and not others, and an edited symlink leaves the canonical copy stale.
+
+Rule 8 is a trade-off rather than a requirement. Committing an instructions alias costs one small file and makes a fresh clone work for a teammate on a different harness. Committing skill links costs a symlink per skill per harness, and buys nothing that `agentlink sync` does not regenerate on demand.
 
 ## The clause
 
@@ -68,6 +71,12 @@ ln -s AGENTS.md CLAUDE.md
 mkdir -p .agents/skills
 git mv .claude/skills/release .agents/skills/release
 ln -s ../../.agents/skills/release .claude/skills/release
+cat >> .gitignore <<'EOF'
+
+# agentlink:begin
+.claude/skills/
+# agentlink:end
+EOF
 
 # 3. The clause
 # paste the block above into AGENTS.md

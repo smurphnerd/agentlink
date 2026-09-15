@@ -2,7 +2,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { hasClause, CLAUSE } from "./convention.js";
 import type { Harness } from "./harnesses.js";
-import { inspect, plan } from "./link.js";
+import { ignoreEntries, isIgnoreMode, readIgnoreBlock } from "./ignore.js";
+import { inspect, plan, readState } from "./link.js";
 import { listSubdirectories, type ScopePaths } from "./scope.js";
 
 export type Severity = "error" | "warn" | "info";
@@ -193,6 +194,25 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
           message: `${harness.label}: link paths are unverified — see ${harness.source}`,
         });
       }
+    }
+  }
+
+  // Unignored links turn up as untracked files in every `git status`.
+  const state = readState(paths);
+  const mode = isIgnoreMode(state.ignore) ? state.ignore : "skills";
+  if (paths.scope === "project" && existsSync(path.join(paths.root, ".git")) && mode !== "none") {
+    const expected = ignoreEntries(mode, {
+      skillDirs: [...new Set(desired.ops.filter((op) => op.kind === "skill").map((op) => path.posix.dirname(op.rel)))],
+      instructionFiles: [...new Set(desired.ops.filter((op) => op.kind === "instructions").map((op) => op.rel))],
+    });
+    const actual = readIgnoreBlock(paths);
+    const missing = expected.filter((entry) => !actual.includes(entry));
+    if (missing.length > 0) {
+      findings.push({
+        severity: "warn",
+        message: `${missing.length} linked path${missing.length === 1 ? "" : "s"} would show up as untracked: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ", …" : ""}`,
+        fix: "agentlink sync",
+      });
     }
   }
 

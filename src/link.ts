@@ -217,17 +217,27 @@ export interface State {
   version: 1;
   scope: string;
   harnesses: string[];
+  /** Which created links are listed in .gitignore. */
+  ignore: string;
   links: { path: string; source: string }[];
 }
 
 export function readState(paths: ScopePaths): State {
   try {
-    const parsed = JSON.parse(readFileSync(paths.stateFile, "utf8")) as State;
-    if (parsed?.version === 1) return parsed;
+    const parsed = JSON.parse(readFileSync(paths.stateFile, "utf8")) as Partial<State>;
+    if (parsed?.version === 1) {
+      return {
+        version: 1,
+        scope: parsed.scope ?? paths.scope,
+        harnesses: parsed.harnesses ?? [],
+        ignore: parsed.ignore ?? "skills",
+        links: parsed.links ?? [],
+      };
+    }
   } catch {
     /* first run */
   }
-  return { version: 1, scope: paths.scope, harnesses: [], links: [] };
+  return { version: 1, scope: paths.scope, harnesses: [], ignore: "skills", links: [] };
 }
 
 export function writeState(paths: ScopePaths, state: State): void {
@@ -241,6 +251,7 @@ export function mergeState(
   previous: State,
   results: ApplyResult[],
   harnessIds: string[],
+  options: { ignore?: string } = {},
 ): State {
   const links = new Map(previous.links.map((link) => [link.path, link]));
   for (const result of results) {
@@ -254,6 +265,7 @@ export function mergeState(
     version: 1,
     scope: paths.scope,
     harnesses: harnessIds,
+    ignore: options.ignore ?? previous.ignore ?? "skills",
     links: [...links.values()].sort((a, b) => a.path.localeCompare(b.path)),
   };
 }

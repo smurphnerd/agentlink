@@ -5,6 +5,7 @@ import { adoptInstructions, ensureClause, initConvention } from "./convention.js
 import { detectAll } from "./detect.js";
 import { diagnose, readSkills } from "./doctor.js";
 import { HARNESSES, resolveHarnessList, type Harness } from "./harnesses.js";
+import { isIgnoreMode, readIgnoreBlock, removeIgnoreBlock, updateGitignore, type IgnoreMode } from "./ignore.js";
 import { apply, mergeState, plan, readState, unlink, writeState } from "./link.js";
 import { existsSync } from "node:fs";
 import { resolveScope, type Scope, type ScopePaths } from "./scope.js";
@@ -30,6 +31,7 @@ interface Options {
   clause: boolean;
   json: boolean;
   verbose: boolean;
+  ignore?: IgnoreMode;
 }
 
 const COMMANDS = ["init", "sync", "select", "list", "doctor", "adopt", "unlink", "help"] as const;
@@ -58,7 +60,13 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--json") options.json = true;
     else if (arg === "--verbose" || arg === "-v") options.verbose = true;
     else if (arg === "--help" || arg === "-h") options.command = "help";
-    else if (arg.startsWith("--harnesses=")) options.harnessIds = split(arg.slice("--harnesses=".length));
+    else if (arg.startsWith("--ignore=")) {
+      const value = arg.slice("--ignore=".length);
+      if (!isIgnoreMode(value)) fail(`--ignore must be one of skills, all, none (got \`${value}\`)`);
+      options.ignore = value;
+    } else if (arg === "--ignore") {
+      options.ignore = "skills";
+    } else if (arg.startsWith("--harnesses=")) options.harnessIds = split(arg.slice("--harnesses=".length));
     else if (arg === "--harnesses") options.harnessIds = [];
     else if (arg.startsWith("-")) {
       fail(`unknown option \`${arg}\``, true);
@@ -74,6 +82,10 @@ function parseArgs(argv: string[]): Options {
     options.harnessIds = split(positional.slice(1).join(","));
   }
   return options;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)].sort();
 }
 
 function split(value: string): string[] {
@@ -152,23 +164,51 @@ async function runSync(paths: ScopePaths, options: Options): Promise<void> {
 }
 
 async function syncLinks(paths: ScopePaths, chosen: Harness[], options: Options): Promise<void> {
+  const previous = readState(paths);
+
   if (!options.dryRun && !existsSync(paths.skills) && existsSync(paths.instructions)) {
     mkdirSync(paths.skills, { recursive: true });
   }
 
-  if (options.clause && existsSync(paths.instructions)) {
-    const clause = ensureClause(paths, { dryRun: options.dryRun });
-    if (clause.changed && !options.json) {
-      step("clause", `${path.basename(paths.instructions)} ${DIM}(${clause.action})${RESET}`);
-    }
-  }
+  const clauseResult =
+    options.clause && existsSync(paths.instructions)
+      ? ensureClause(paths, { dryRun: options.dryRun })
+      : undefined;
 
   const linkPlan = plan(paths, chosen);
   const results = apply(paths, linkPlan, { dryRun: options.dryRun });
 
+  const mode: IgnoreMode = options.ignore ?? (isIgnoreMode(previous.ignore) ? previous.ignore : "skills");
+  const ignoreResult = updateGitignore(
+    paths,
+    mode,
+    {
+      skillDirs: unique(linkPlan.ops.filter((op) => op.kind === "skill").map((op) => path.posix.dirname(op.rel))),
+      instructionFiles: unique(
+        linkPlan.ops.filter((op) => op.kind === "instructions").map((op) => op.rel),
+      ),
+    },
+    { dryRun: options.dryRun },
+  );
+
   if (!options.dryRun) {
-    const state = mergeState(paths, readState(paths), results, chosen.map((h) => h.id));
+    const state = mergeState(paths, previous, results, chosen.map((h) => h.id), { ignore: mode });
     writeState(paths, state);
+  }
+
+  if (clauseResult?.changed && !options.json) {
+    step("clause", `${path.basename(paths.instructions)} ${DIM}(${clauseResult.action})${RESET}`);
+  }
+  if (!options.json && !ignoreResult.skipped) {
+    const count = ignoreResult.entries.length;
+    if (ignoreResult.changed) {
+      step(
+        "ignore",
+        `.gitignore ${DIM}(${count} entr${count === 1 ? "y" : "ies"}${options.dryRun ? ", would update" : ""})${RESET}`,
+      );
+    } else {
+      step("ignore", `.gitignore ${DIM}(already covers ${count} path${count === 1 ? "" : "s"})${RESET}`);
+    }
   }
 
   if (options.json) {
@@ -183,6 +223,12 @@ async function syncLinks(paths: ScopePaths, chosen: Harness[], options: Options)
           native: linkPlan.native,
           unknown: linkPlan.unknown,
           skills: linkPlan.skillsFound,
+          ignore: {
+            mode,
+            file: ignoreResult.skipped ? null : ignoreResult.file,
+            entries: ignoreResult.entries,
+            changed: ignoreResult.changed,
+          },
         },
         null,
         2,
@@ -333,12 +379,14 @@ function runAdopt(paths: ScopePaths, options: Options): void {
 
 function runUnlink(paths: ScopePaths, options: Options): void {
   const result = unlink(paths, { dryRun: options.dryRun });
+  const ignoreChanged = removeIgnoreBlock(paths, { dryRun: options.dryRun });
   if (options.json) {
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ...result, ignoreBlockRemoved: ignoreChanged }, null, 2)}\n`);
     return;
   }
   for (const removed of result.removed) step("unlink", removed);
   for (const keep of result.kept) process.stdout.write(`  ${YELLOW}!${RESET} kept ${keep.path} ${DIM}(${keep.reason})${RESET}\n`);
+  if (ignoreChanged) step("ignore", `.gitignore ${DIM}(block removed)${RESET}`);
   if (result.removed.length === 0 && result.kept.length === 0) {
     process.stdout.write(`${DIM}nothing to unlink${RESET}\n`);
   }
@@ -428,6 +476,8 @@ ${BOLD}options${RESET}
   -n, --dry-run            show what would change
   -y, --yes                never prompt
       --no-clause          leave AGENTS.md untouched
+      --ignore=skills|all|none
+                           what to list in .gitignore (default: skills)
       --json               machine-readable output
   -v, --verbose            more detail
 
@@ -435,6 +485,7 @@ ${BOLD}the convention${RESET}
   AGENTS.md                     instructions. Everything else points here.
   .agents/skills/<name>/SKILL.md  skills, one directory each.
   ${DIM}Files like CLAUDE.md and .claude/skills/ are symlinks into the above.${RESET}
+  ${DIM}Instructions aliases are committed; skill links go in .gitignore.${RESET}
 `);
 }
 
