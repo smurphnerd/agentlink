@@ -55,7 +55,7 @@ export function updateGitignore(
   }
 
   const before = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const after = applyBlock(before, entries);
+  const after = applyIgnoreBlock(before, entries);
   const changed = after !== before;
   if (changed && !options.dryRun) writeFileSync(file, after, "utf8");
   return { changed, file, entries };
@@ -66,7 +66,7 @@ export function removeIgnoreBlock(paths: ScopePaths, options: { dryRun?: boolean
   const file = path.join(paths.root, ".gitignore");
   if (!existsSync(file)) return false;
   const before = readFileSync(file, "utf8");
-  const after = applyBlock(before, []);
+  const after = applyIgnoreBlock(before, []);
   if (after === before) return false;
   if (!options.dryRun) writeFileSync(file, after, "utf8");
   return true;
@@ -89,7 +89,7 @@ export function readIgnoreBlock(paths: ScopePaths): string[] {
     .filter((line) => line.length > 0 && !line.startsWith("#"));
 }
 
-function applyBlock(text: string, entries: string[]): string {
+export function applyIgnoreBlock(text: string, entries: string[]): string {
   const start = text.indexOf(BEGIN);
   const end = text.indexOf(END, start === -1 ? 0 : start);
   const withoutBlock =

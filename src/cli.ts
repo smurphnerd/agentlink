@@ -4,10 +4,12 @@ import path from "node:path";
 import { adoptInstructions, ensureClause, initConvention } from "./convention.js";
 import { detectAll } from "./detect.js";
 import { diagnose, readSkills } from "./doctor.js";
+import { applyFixes, planFixes, type FixAction } from "./fix.js";
 import { HARNESSES, resolveHarnessList, type Harness } from "./harnesses.js";
 import { isIgnoreMode, readIgnoreBlock, removeIgnoreBlock, updateGitignore, type IgnoreMode } from "./ignore.js";
 import { apply, mergeState, plan, readState, unlink, writeState } from "./link.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolveScope, type Scope, type ScopePaths } from "./scope.js";
 import { selectMany, type Choice } from "./ui.js";
 
@@ -28,13 +30,14 @@ interface Options {
   detected: boolean;
   dryRun: boolean;
   yes: boolean;
+  force: boolean;
   clause: boolean;
   json: boolean;
   verbose: boolean;
   ignore?: IgnoreMode;
 }
 
-const COMMANDS = ["init", "sync", "select", "list", "doctor", "adopt", "unlink", "help"] as const;
+const COMMANDS = ["init", "sync", "select", "fix", "list", "doctor", "adopt", "unlink", "help"] as const;
 
 function parseArgs(argv: string[]): Options {
   const options: Options = {
@@ -44,6 +47,7 @@ function parseArgs(argv: string[]): Options {
     detected: false,
     dryRun: false,
     yes: false,
+    force: false,
     clause: true,
     json: false,
     verbose: false,
@@ -56,9 +60,11 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--detected") options.detected = true;
     else if (arg === "--dry-run" || arg === "-n") options.dryRun = true;
     else if (arg === "--yes" || arg === "-y") options.yes = true;
+    else if (arg === "--force") options.force = true;
     else if (arg === "--no-clause") options.clause = false;
     else if (arg === "--json") options.json = true;
     else if (arg === "--verbose" || arg === "-v") options.verbose = true;
+    else if (arg === "--version" || arg === "-V") options.command = "version";
     else if (arg === "--help" || arg === "-h") options.command = "help";
     else if (arg.startsWith("--ignore=")) {
       const value = arg.slice("--ignore=".length);
@@ -101,6 +107,7 @@ function fail(message: string, usage = false): never {
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.command === "help") return help();
+  if (options.command === "version") return version();
 
   const cwd = process.cwd();
   const paths = resolveScope(options.scope, cwd);
@@ -112,6 +119,8 @@ async function main(): Promise<void> {
       return runSelect(paths, options);
     case "sync":
       return runSync(paths, options);
+    case "fix":
+      return runFix(paths, options);
     case "list":
       return runList(paths, options);
     case "doctor":
@@ -147,7 +156,45 @@ async function runInit(paths: ScopePaths, options: Options): Promise<void> {
     if (result.createdSkillsDir) step("create", `${where}/.agents/skills/`);
     else step("keep", `${where}/.agents/skills/`);
   }
+  migrateDuplicates(paths, chosen, options);
   await syncLinks(paths, chosen, options);
+}
+
+async function runFix(paths: ScopePaths, options: Options): Promise<void> {
+  const chosen = await chooseHarnesses(paths, options, { prompt: false, fallback: "detected" });
+  if (!existsSync(paths.instructions)) {
+    if (!options.json) {
+      process.stdout.write(`${DIM}no AGENTS.md here yet — run \`agentlink init\` first${RESET}\n`);
+    }
+    return;
+  }
+  migrateDuplicates(paths, chosen, options);
+  await syncLinks(paths, chosen, options);
+}
+
+/** Resolve real copies sitting where a symlink belongs, without guessing. */
+function migrateDuplicates(paths: ScopePaths, chosen: Harness[], options: Options): void {
+  const actions = planFixes(paths, chosen);
+  if (actions.length === 0) return;
+
+  const results = applyFixes(paths, actions, { dryRun: options.dryRun, force: options.force });
+  if (options.json) return;
+
+  for (const result of results) {
+    const dry = options.dryRun ? ` ${DIM}(dry run)${RESET}` : "";
+    if (result.kind === "move") {
+      step("move", `${result.target} → ${result.canonical}${dry}`);
+    } else if (result.kind === "remove-identical") {
+      step("cleanup", `${result.target} ${DIM}identical to the canonical copy${RESET}${dry}`);
+    } else {
+      const command = result.skill ? "diff -r" : "diff";
+      process.stdout.write(
+        `  ${YELLOW}!${RESET} conflict ${result.target} ${DIM}${result.detail ?? ""}${RESET}\n` +
+          `    ${DIM}fix: ${command} ${result.target} ${result.canonical}, merge by hand, then \`agentlink fix\`${RESET}\n` +
+          `         ${DIM}or \`agentlink fix --force\` to drop the copy in favour of the canonical one${RESET}\n`,
+      );
+    }
+  }
 }
 
 async function runSelect(paths: ScopePaths, options: Options): Promise<void> {
@@ -454,6 +501,16 @@ function step(verb: string, message: string): void {
   process.stdout.write(`  ${GREEN}✓${RESET} ${DIM}${padded}${RESET}${message}\n`);
 }
 
+function version(): void {
+  try {
+    const file = fileURLToPath(new URL("../package.json", import.meta.url));
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { version?: string };
+    process.stdout.write(`${parsed.version ?? "unknown"}\n`);
+  } catch {
+    process.stdout.write("unknown\n");
+  }
+}
+
 function help(): void {
   process.stdout.write(`
 ${BOLD}agentlink${RESET} ${DIM}— one source of truth for agent instructions and skills${RESET}
@@ -462,6 +519,7 @@ ${BOLD}usage${RESET}
   agentlink                      pick harnesses (first run), then link
   agentlink init                 create AGENTS.md + .agents/skills and link
   agentlink sync                 re-link after adding or moving a skill
+  agentlink fix                  fold stray real copies into .agents, then link
   agentlink select               change which harnesses are linked
   agentlink list                 show every harness and where it reads from
   agentlink doctor               report drift, duplicates and broken links
@@ -475,6 +533,7 @@ ${BOLD}options${RESET}
       --detected           only harnesses found on this machine
   -n, --dry-run            show what would change
   -y, --yes                never prompt
+      --force              on a conflict, keep the canonical copy
       --no-clause          leave AGENTS.md untouched
       --ignore=skills|all|none
                            what to list in .gitignore (default: skills)
@@ -486,6 +545,10 @@ ${BOLD}the convention${RESET}
   .agents/skills/<name>/SKILL.md  skills, one directory each.
   ${DIM}Files like CLAUDE.md and .claude/skills/ are symlinks into the above.${RESET}
   ${DIM}Instructions aliases are committed; skill links go in .gitignore.${RESET}
+
+${BOLD}more${RESET}
+  agentlink help            this text
+  agentlink --version       print the version
 `);
 }
 

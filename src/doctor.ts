@@ -179,7 +179,7 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
         findings.push({
           severity: "warn",
           message: `${short(paths, op.target)} is a real copy of skill \`${op.skill}\``,
-          fix: "delete it and run `agentlink sync` — the canonical copy is .agents/skills/" + op.skill,
+          fix: `agentlink fix  (moves or removes it; the canonical copy is .agents/skills/${op.skill})`,
         });
       }
     }

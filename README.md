@@ -28,8 +28,9 @@ npx agentlink sync
 
 ```
 agentlink                pick harnesses (first run), then link
-agentlink init           create AGENTS.md + .agents/skills and link
+agentlink init           create AGENTS.md + .agents/skills, migrate, link
 agentlink sync           re-link after adding or moving a skill
+agentlink fix            fold stray real copies into .agents, then link
 agentlink select         change which harnesses are linked
 agentlink list           every harness, where it reads from, whether it is installed
 agentlink doctor         drift, duplicates, invalid skills, broken links
@@ -37,7 +38,9 @@ agentlink adopt          move an existing CLAUDE.md or GEMINI.md into AGENTS.md
 agentlink unlink         remove the links agentlink created
 ```
 
-Options: `--global` (`-g`) for `$HOME` instead of a repository, `--harnesses a,b` to skip the picker, `--all`, `--detected`, `--dry-run`, `--yes`, `--json`, `--no-clause`.
+`init` does the whole conversion in one pass, including skills that already exist as real directories inside a harness folder. An orphan copy is moved into `.agents/skills/` and linked back. A copy identical to the canonical one is deleted. A copy that differs is reported and left alone until you have looked at it; `agentlink fix --force` drops the copy in favour of the canonical one.
+
+Options: `--global` (`-g`) for `$HOME` instead of a repository, `--harnesses a,b` to skip the picker, `--all`, `--detected`, `--dry-run`, `--yes`, `--force`, `--json`, `--no-clause`.
 
 ## What gets linked
 
@@ -124,6 +127,14 @@ src/ui.ts          the checkbox picker, no dependencies
 ```
 
 Zero runtime dependencies. `npm run build` runs `tsc` into `dist/`.
+
+## Tests
+
+```bash
+npm test     # tsc, then node --test over test/
+```
+
+No test framework. The suite covers the path table invariants, symlink planning and repair, the `.gitignore` block, the AGENTS.md clause, duplicate migration, and the CLI run end to end in throwaway git repositories.
 
 ## Adding a harness
 

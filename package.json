@@ -12,14 +12,25 @@
     "cli"
   ],
   "license": "MIT",
+  "author": "Sean Murphy (https://github.com/smurphnerd)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smurphnerd/agentlink.git"
+  },
+  "homepage": "https://github.com/smurphnerd/agentlink#readme",
+  "bugs": {
+    "url": "https://github.com/smurphnerd/agentlink/issues"
+  },
   "type": "module",
   "bin": {
     "agentlink": "dist/cli.js"
   },
   "files": [
     "dist",
+    "src",
     "README.md",
-    "CONVENTION.md"
+    "CONVENTION.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
@@ -28,7 +39,10 @@
     "build": "tsc",
     "prepare": "tsc",
     "dev": "node --experimental-strip-types src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "test": "npm run build && node --test test/",
+    "test:unit": "node --test test/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm test"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
