@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "scope": "project",
+  "harnesses": [
+    "claude",
+    "codex",
+    "pi",
+    "omp",
+    "opencode"
+  ],
+  "ignore": "skills",
+  "links": []
+}

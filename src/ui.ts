@@ -29,6 +29,32 @@ const BOLD = `${ESC}[1m`;
 const RESET = `${ESC}[0m`;
 const CYAN = `${ESC}[36m`;
 
+/**
+ * What the picker starts with.
+ *
+ * The saved selection wins, so re-running `select` shows the current state and
+ * a harness you removed stays removed. Only a first run, with nothing saved,
+ * falls back to what is installed on this machine.
+ */
+export function buildHarnessChoices(
+  inputs: { id: string; label: string; installed: boolean; reasons: string[] }[],
+  saved: string[],
+): Choice[] {
+  const useSaved = saved.length > 0;
+  return inputs.map((input) => {
+    const checked = useSaved ? saved.includes(input.id) : input.installed;
+    const reasons = input.reasons.length > 0 ? input.reasons.join(" · ") : "not detected";
+    return {
+      id: input.id,
+      label: input.label,
+      // A selected-but-absent harness looks like a mistake unless it is explained.
+      hint: checked && !input.installed ? `${reasons} · still linked` : reasons,
+      checked,
+      group: input.installed ? "detected" : "other",
+    };
+  });
+}
+
 export async function selectMany(choices: Choice[], options: SelectOptions): Promise<string[] | null> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     return choices.filter((c) => c.checked).map((c) => c.id);

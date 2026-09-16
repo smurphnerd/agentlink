@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed: `select` remembered your selection but the picker did not use it, so
+  every run re-ticked every installed harness and a harness you removed came
+  back by default. The picker now starts from the saved selection, and falls
+  back to what is installed only on a first run.
+- The picker's help line says the current selection is pre-ticked, and a
+  harness kept in the selection but no longer installed is labelled
+  "still linked" rather than looking like a stray checkbox.
+
 ## 0.2.0
 
 Corrects the path table against the code each harness actually ships, checked

@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { upsertClause, CLAUSE, BEGIN_MARKER, END_MARKER } from "../dist/convention.js";
 import { hashTree } from "../dist/fix.js";
 import { HARNESSES, resolveHarnessList } from "../dist/harnesses.js";
+import { buildHarnessChoices } from "../dist/ui.js";
 import { applyIgnoreBlock } from "../dist/ignore.js";
 import { expandHome, findRepoRoot, listSubdirectories, resolveScope } from "../dist/scope.js";
 
@@ -203,4 +204,44 @@ test("listSubdirectories skips dotfiles and missing directories", () => {
   assert.deepEqual(listSubdirectories(dir), ["one", "two"]);
   assert.deepEqual(listSubdirectories(path.join(dir, "missing")), []);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("the picker starts from the saved selection, not from what is installed", () => {
+  const inputs = [
+    { id: "claude", label: "Claude Code", installed: true, reasons: ["binary claude"] },
+    { id: "grok", label: "Grok CLI", installed: true, reasons: ["binary grok"] },
+    { id: "cursor", label: "Cursor", installed: false, reasons: [] },
+  ];
+
+  // First run: nothing saved, so what is installed is the sensible default.
+  const first = buildHarnessChoices(inputs, []);
+  assert.deepEqual(
+    first.map((c) => [c.id, c.checked]),
+    [["claude", true], ["grok", true], ["cursor", false]],
+  );
+
+  // After that the saved selection wins, so a deselected harness stays that way
+  // on the next run instead of springing back because it is installed.
+  const second = buildHarnessChoices(inputs, ["claude"]);
+  assert.deepEqual(
+    second.map((c) => [c.id, c.checked]),
+    [["claude", true], ["grok", false], ["cursor", false]],
+  );
+
+  // A harness kept in the selection but no longer installed is still shown as
+  // selected, and says so.
+  const absent = buildHarnessChoices(inputs, ["claude", "cursor"]);
+  const cursor = absent.find((c) => c.id === "cursor");
+  assert.equal(cursor.checked, true);
+  assert.match(cursor.hint, /still linked/);
+});
+
+test("the picker never drops a saved selection when a key sets the checkboxes", () => {
+  const inputs = [
+    { id: "claude", label: "Claude Code", installed: true, reasons: ["binary claude"] },
+    { id: "cursor", label: "Cursor", installed: false, reasons: [] },
+  ];
+  const choices = buildHarnessChoices(inputs, ["cursor"]);
+  assert.equal(choices.find((c) => c.id === "cursor").checked, true);
+  assert.equal(choices.find((c) => c.id === "claude").checked, false);
 });

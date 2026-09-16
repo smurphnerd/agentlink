@@ -11,7 +11,7 @@ import { endpointVerified, HARNESSES, resolveHarnessList, type Harness } from ".
 import { isIgnoreMode, readIgnoreBlock, removeIgnoreBlock, updateGitignore, type IgnoreMode } from "./ignore.js";
 import { apply, mergeState, plan, pruneStale, readState, unlink, writeState } from "./link.js";
 import { resolveScope, type Scope, type ScopePaths } from "./scope.js";
-import { selectMany, type Choice } from "./ui.js";
+import { buildHarnessChoices, selectMany } from "./ui.js";
 
 const ESC = String.fromCharCode(27);
 // Colour only when something is reading it: a TTY, and not opted out. Piped
@@ -588,7 +588,7 @@ async function chooseHarnesses(
 
   // Never prompt when the caller cannot answer: --yes, --json, or no TTY.
   const canPrompt = !options.yes && !options.json && process.stdin.isTTY === true && process.stdout.isTTY === true;
-  if (behaviour.prompt && canPrompt) return promptForHarnesses();
+  if (behaviour.prompt && canPrompt) return promptForHarnesses(paths);
 
   const fallback = detectedHarnesses();
   if (!options.json) {
@@ -603,19 +603,21 @@ async function chooseHarnesses(
   return fallback;
 }
 
-async function promptForHarnesses(): Promise<Harness[]> {
+async function promptForHarnesses(paths: ScopePaths): Promise<Harness[]> {
   const detections = detectAll();
-  const choices: Choice[] = detections.map(({ harness, installed, reasons }) => ({
-    id: harness.id,
-    label: harness.label,
-    hint: installed ? reasons.join(" · ") : "not detected",
-    checked: installed,
-    group: installed ? "detected" : "other",
-  }));
+  const choices = buildHarnessChoices(
+    detections.map(({ harness, installed, reasons }) => ({
+      id: harness.id,
+      label: harness.label,
+      installed,
+      reasons,
+    })),
+    readState(paths).harnesses,
+  );
 
   const picked = await selectMany(choices, {
     title: "Which harnesses should read this project's AGENTS.md and skills?",
-    help: "space toggle · a all · i installed only · enter confirm · esc cancel",
+    help: "current selection pre-ticked · space toggle · a all · i installed only · enter confirm · esc cancel",
   });
   if (picked === null) {
     process.stdout.write(`${DIM}cancelled${RESET}\n`);
