@@ -165,11 +165,11 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
   for (const skill of readSkills(paths)) {
     if (!skill.hasDirectSkillFile) {
       findings.push({
-        severity: "error",
+        severity: skill.hasNestedSkillFile ? "warn" : "error",
         message: skill.hasNestedSkillFile
-          ? `.agents/skills/${skill.name} has no SKILL.md directly inside, only nested ones — most harnesses will not find it`
+          ? `.agents/skills/${skill.name} has no SKILL.md directly inside; only some harnesses (Cursor, Pi) recurse into subdirectories`
           : `.agents/skills/${skill.name} has no SKILL.md`,
-        fix: "put SKILL.md at .agents/skills/<skill-name>/SKILL.md",
+        fix: "put SKILL.md at .agents/skills/<skill-name>/SKILL.md unless every harness you use recurses",
       });
       continue;
     }
@@ -206,6 +206,21 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
 
   // --- links ----------------------------------------------------------------
   const desired = plan(paths, harnesses);
+  for (const entry of desired.unknown) {
+    const harness = harnesses.find((h) => h.id === entry.harnessId);
+    const endpoint = harness?.[entry.kind === "skill" ? "skills" : "instructions"][paths.scope];
+    findings.push({
+      severity: "info",
+      message: `${harness?.label ?? entry.harnessId}: no known ${entry.kind} path for ${paths.scope} scope, so nothing is linked`,
+      fix: endpoint?.note ?? "the path is not documented; see the source URL in `agentlink list --json`",
+    });
+  }
+  for (const entry of desired.aliases) {
+    findings.push({
+      severity: "info",
+      message: `${entry.rel} is a symlink to .agents/skills, which is the same arrangement agentlink would create`,
+    });
+  }
   for (const op of desired.ops) {
     const existing = inspect(op.target);
     if (existing.kind === "missing") {
@@ -241,6 +256,9 @@ export function diagnose({ paths, harnesses }: DoctorInput): Finding[] {
   // --- honesty about the table ---------------------------------------------
   for (const harness of harnesses) {
     for (const { kind, endpoint } of unverifiedEndpoints(harness, paths.scope)) {
+      // Unknown paths are reported by the loop above, where the message can say
+      // what is missing rather than naming a path that does not exist.
+      if (!endpoint.alias && !endpoint.native) continue;
       const where = endpoint.native ? "native path" : endpoint.alias;
       findings.push({
         severity: "info",

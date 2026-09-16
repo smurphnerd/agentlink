@@ -143,9 +143,9 @@ test("finding 6: unlink ignores a state file that escapes the repository", () =>
 
 test("finding 7: a stale link is pruned when a skill or harness goes away", () => {
   const root = repo(["demo", "other"]);
-  run(["init", "--harnesses", "claude,cursor", "--yes"], root);
+  run(["init", "--harnesses", "claude,qwen", "--yes"], root);
   assert.ok(existsSync(path.join(root, ".claude", "skills", "other")));
-  assert.ok(existsSync(path.join(root, ".cursor", "skills", "other")));
+  assert.ok(existsSync(path.join(root, ".qwen", "skills", "other")));
 
   // Delete a skill, and deselect a harness.
   rmSync(path.join(root, ".agents", "skills", "other"), { recursive: true });
@@ -153,7 +153,7 @@ test("finding 7: a stale link is pruned when a skill or harness goes away", () =
   assert.equal(code, 0);
 
   assert.ok(!existsSync(path.join(root, ".claude", "skills", "other")), "dead skill link is gone");
-  assert.ok(!existsSync(path.join(root, ".cursor", "skills", "demo")), "deselected harness is unlinked");
+  assert.ok(!existsSync(path.join(root, ".qwen", "skills", "demo")), "deselected harness is unlinked");
   assert.ok(existsSync(path.join(root, ".claude", "skills", "demo")), "wanted links stay");
   rmSync(root, { recursive: true, force: true });
 });
@@ -236,31 +236,36 @@ test("finding 10: doctor treats a missing link as an error", () => {
 });
 
 test("finding 11: unverified endpoints are named per scope, not hidden by the row", () => {
-  const root = repo(["demo"]);
-  run(["init", "--harnesses", "claude,cursor", "--yes"], root);
-  const { out } = run(["doctor"], root);
-  assert.match(out, /Cursor: skills \.cursor\/skills is not confirmed/);
-
-  // Qwen's project paths are documented, so only its global alias is flagged.
-  // A row-wide flag would have shown it as fully confirmed, or not at all.
+  // Verification is per endpoint per scope, so a harness can be documented in a
+  // project and unconfirmed at home. Qwen is exactly that, and a row-wide flag
+  // could not express it.
   const qwen = harness("qwen");
   assert.equal(endpointVerified(qwen.instructions.project), true);
   assert.equal(endpointVerified(qwen.skills.project), true);
+  assert.equal(endpointVerified(qwen.instructions.global), false);
   assert.deepEqual(
     unverifiedEndpoints(qwen, "global").map((entry) => entry.endpoint.alias),
     [".qwen/AGENTS.md"],
   );
 
-  // And the list reports verification per endpoint, which a row-wide flag
-  // could not express: Cursor's AGENTS.md support is documented, its skills
-  // directory is not.
-  const list = run(["list", "--json"], root);
-  const rows = JSON.parse(list.out).harnesses;
-  const cursor = rows.find((row) => row.id === "cursor");
-  assert.equal(cursor.instructionsVerified, true);
-  assert.equal(cursor.skillsVerified, false);
-  assert.equal(rows.find((row) => row.id === "qwen").instructionsVerified, true);
-  rmSync(root, { recursive: true, force: true });
+  // And doctor names the path rather than hiding it behind the row.
+  const home = mkdtempSync(path.join(tmpdir(), "agentlink-home-"));
+  mkdirSync(path.join(home, ".agents", "skills", "demo"), { recursive: true });
+  writeFileSync(path.join(home, ".agents", "skills", "demo", "SKILL.md"), skill("demo"));
+  writeFileSync(path.join(home, "AGENTS.md"), "# Global\n");
+  const init = run(["init", "--global", "--harnesses", "qwen,grok", "--yes"], home, { HOME: home });
+  assert.equal(init.code, 0, init.err);
+
+  const { code, out } = run(["doctor", "--global", "--harnesses", "qwen,grok"], home, { HOME: home });
+  assert.match(out, /Qwen Code: instructions \.qwen\/AGENTS\.md is not confirmed/);
+  assert.match(out, /Grok CLI: instructions \.grok\/AGENTS\.md is not confirmed/);
+  assert.equal(code, 0, "an unconfirmed path is information, not a failure");
+
+  const rows = JSON.parse(run(["list", "--global", "--json"], home, { HOME: home }).out).harnesses;
+  const qwenRow = rows.find((row) => row.id === "qwen");
+  assert.equal(qwenRow.skillsVerified, true);
+  assert.equal(qwenRow.instructionsVerified, false);
+  rmSync(home, { recursive: true, force: true });
 });
 
 test("finding 12: a broken symlink in .agents/skills is an error, not a skill", () => {
@@ -273,12 +278,14 @@ test("finding 12: a broken symlink in .agents/skills is an error, not a skill", 
   rmSync(root, { recursive: true, force: true });
 });
 
-test("finding 13: a grouping folder without a direct SKILL.md is reported", () => {
+test("finding 13: a grouping folder without a direct SKILL.md is reported as a warning", () => {
   const root = repo();
   mkdirSync(path.join(root, ".agents", "skills", "group", "inner"), { recursive: true });
   writeFileSync(path.join(root, ".agents", "skills", "group", "inner", "SKILL.md"), skill("inner"));
-  const { code, out } = run(["doctor"], root);
-  assert.notEqual(code, 0);
+  // Cursor and Pi both document recursive discovery, so this warns rather than
+  // fails: the layout is valid for some harnesses and invisible to others.
+  const { code, out } = run(["doctor", "--harnesses", "mastracode"], root);
+  assert.equal(code, 0);
   assert.match(out, /no SKILL.md directly inside/);
   rmSync(root, { recursive: true, force: true });
 });
@@ -358,4 +365,20 @@ test("finding 17: content standing in the way fails the run, a missing source do
 
   rmSync(blocked, { recursive: true, force: true });
   rmSync(premature, { recursive: true, force: true });
+});
+
+test("an unknown path is reported, not silently skipped", () => {
+  // Kilo Code's skills path survived no inspection, so agentlink links nothing.
+  // Saying so is the difference between "nothing needed" and "no idea where to
+  // put it", which the user cannot tell apart from silence.
+  const kilo = harness("kilo");
+  assert.equal(kilo.skills.project.alias, undefined);
+  assert.equal(kilo.skills.project.native, false);
+
+  const root = repo(["demo"]);
+  const { code, out } = run(["doctor", "--harnesses", "kilo"], root);
+  assert.equal(code, 0, "an unknown path is information, not a failure");
+  assert.match(out, /no known skill path/);
+  assert.ok(!existsSync(path.join(root, ".claude", "skills", "demo")), "and nothing was linked");
+  rmSync(root, { recursive: true, force: true });
 });

@@ -53,22 +53,22 @@ Where a harness already reads `AGENTS.md` or `.agents/skills/`, agentlink writes
 | Pi | native | native | yes |
 | Oh My Pi (omp) | native | .omp/skills | yes |
 | GitHub Copilot CLI | native | native | yes |
-| Cursor | native | .cursor/skills | no (skills) |
-| opencode | native | .opencode/skills | no (skills) |
+| Cursor | native | native | yes |
+| opencode | native | .opencode/skills | yes |
 | Qwen Code | native | .qwen/skills | yes |
-| Kimi Code CLI | native | .kimi-code/skills | yes |
-| Kilo Code | native | .claude/skills | no (skills) |
+| Kimi Code CLI | native | native | yes |
+| Kilo Code | native | unknown | yes |
 | Factory Droid | native | .factory/skills | yes |
 | Devin CLI | native | .devin/skills | yes |
 | Mastra Code | native | native | yes |
-| Grok CLI | native | .grok/skills | yes |
-| Qoder CLI | native | .qoder/skills | yes |
-| Antigravity CLI | native | .agent/skills | no (instructions, skills) |
-| Hermes | native | .hermes/skills | no (instructions, skills) |
+| Grok CLI | native | native | yes |
+| Qoder CLI | native | native | yes |
+| Antigravity CLI | native | native | yes |
+| Hermes | native | unknown | yes |
 
-Confirmation is tracked per endpoint, not per harness, and per scope. A harness can have a documented project path and an undocumented global one. `agentlink list --json` prints the flag and the source URL for each endpoint, and `doctor` names every unverified path in your selection.
+"native" means the harness reads `AGENTS.md` or `.agents/skills` itself, so agentlink writes nothing. Nine of the seventeen do, for skills: Codex, Pi, Copilot, Cursor, Kimi, Mastra, Grok, Qoder and Antigravity. `unknown` means no path could be established, which is Kilo Code's skills directory; agentlink links nothing there rather than guessing.
 
-The global scope is the weaker half of the table on purpose. Fewer vendors document where their home-directory instructions file lives, so `--global` links more speculative paths than a project does. Both scopes are listed in `list --json`.
+Confirmation is tracked per endpoint per scope, not per harness. Every path is checked either against the vendor's documentation or against the code they ship (`scripts/verify-paths.mjs`). What remains unconfirmed is seven **global instruction files** — Qwen, Kimi, Kilo, Droid, Mastra, Grok and Qoder. Those vendors document a project path and say nothing about a home-directory equivalent, so `doctor` names each one when it is in your selection. They are not errors: a symlink in a path nothing reads is inert, and the cost of being wrong is that one harness does not see your global instructions.
 
 ## Global scope
 

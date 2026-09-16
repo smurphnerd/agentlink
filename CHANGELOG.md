@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.2
+
+More rows corrected from vendor documentation, after several people pointed at
+pages that document the canonical path directly.
+
+- Cursor reads `.agents/skills/` and `~/.agents/skills/`, and `AGENTS.md` at the
+  project root and in subdirectories. Its skills need no link, and its user rules
+  live in settings rather than a file, so there is nothing to link globally.
+- Antigravity reads `.agents/skills/` in the workspace. `.agent/skills` was the
+  deprecated fallback, and `.gemini/config/skills` is the confirmed global
+  directory. Global constraints are `~/.gemini/GEMINI.md`, not the
+  `.gemini/config/AGENTS.md` that was guessed.
+- Kimi reads `.agents/skills/` at both project and user level, so neither scope
+  needs a link.
+- opencode auto-loads `~/.agents/skills/`, so only its project directory needs
+  linking.
+- Hermes reads `AGENTS.md` by walking to the git root, and keeps all skills in
+  `~/.hermes/skills/`. It has no documented project-level skills directory, so
+  that scope now reports as unknown instead of linking somewhere unread.
+- Kilo Code's global instructions file is flagged unverified; a table test now
+  fails when a row's note admits doubt while its flag claims confirmation.
+
+Nine of seventeen harnesses now need no skills link at all.
+
 ## 0.2.1
 
 - Fixed: `select` remembered your selection but the picker did not use it, so

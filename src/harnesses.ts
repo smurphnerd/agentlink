@@ -168,15 +168,16 @@ export const HARNESSES: Harness[] = [
     label: "Cursor",
     bins: ["cursor-agent", "cursor"],
     configRoot: ".cursor",
+    // AGENTS.md at the project root and in subdirectories. User rules are
+    // configured in Cursor's settings, not read from a file, so there is nothing
+    // to link globally.
     instructions: scopes(
-      { native: true, note: "Cursor reads AGENTS.md" },
-      { native: false, alias: ".cursor/AGENTS.md", note: "not documented by Cursor", verified: false },
+      { native: true, note: "AGENTS.md at the project root and in subdirectories" },
+      { native: false, note: "user rules live in Cursor settings, not in a file" },
     ),
-    skills: scopes(
-      { native: false, alias: ".cursor/skills", verified: false },
-      { native: false, alias: ".cursor/skills", verified: false },
-    ),
-    source: "https://cursor.com/docs/agent/context",
+    // .agents/skills and ~/.agents/skills are documented, so nothing to link.
+    skills: scopes(NATIVE, NATIVE),
+    source: "https://cursor.com/docs/skills",
   },
   {
     id: "opencode",
@@ -188,11 +189,13 @@ export const HARNESSES: Harness[] = [
       { native: true },
       { native: false, alias: ".config/opencode/AGENTS.md" },
     ),
-    // .opencode/skills confirmed in the shipped binary; the home-directory
-    // equivalent is not a literal anywhere in it.
+    // The binary's own documentation: "External skills (auto-loaded):
+    // ~/.claude/skills/<name>/SKILL.md, ~/.agents/skills/<name>/SKILL.md" and
+    // "Project skills: .opencode/skill(s)/<name>/SKILL.md". So the project needs a
+    // link and the home directory does not.
     skills: scopes(
       { native: false, alias: ".opencode/skills" },
-      { native: false, alias: ".config/opencode/skills", verified: false },
+      NATIVE,
     ),
     source: "https://opencode.ai/docs/rules/",
   },
@@ -221,10 +224,10 @@ export const HARNESSES: Harness[] = [
       { native: true },
       { native: false, alias: ".kimi-code/AGENTS.md", note: "not documented by Kimi", verified: false },
     ),
-    skills: scopes(
-      { native: false, alias: ".kimi-code/skills" },
-      NATIVE, // Kimi scans ~/.agents/skills as its "generic group"
-    ),
+    // Documented at both levels under "Skill Locations": project level scans
+    // .kimi-code/skills/ and .agents/skills/, user level scans
+    // $KIMI_CODE_HOME/skills/ and ~/.agents/skills/.
+    skills: scopes(NATIVE, NATIVE),
     source: "https://www.kimi.com/code/docs/en/kimi-code-cli/customization/skills.html",
   },
   {
@@ -235,7 +238,7 @@ export const HARNESSES: Harness[] = [
     npmPackage: "@kilocode/cli",
     instructions: scopes(
       { native: true },
-      { native: false, alias: ".config/kilo/AGENTS.md", note: "not documented by Kilo" },
+      { native: false, alias: ".config/kilo/AGENTS.md", note: "not documented by Kilo", verified: false },
     ),
     // No skills path survived inspection of the shipped binary: its config
     // directory holds command/, themes/ and config files, and .claude/skills
@@ -327,30 +330,42 @@ export const HARNESSES: Harness[] = [
     label: "Antigravity CLI",
     bins: ["agy", "antigravity"],
     configRoot: ".gemini/config",
+    // Workspace rules are AGENTS.md (with GEMINI.md and CONTEXT.md kept for the
+    // Gemini lineage); global constraints live in ~/.gemini/GEMINI.md.
     instructions: scopes(
-      { native: true, note: "Gemini-lineage discovery: AGENTS.md, CONTEXT.md, GEMINI.md", verified: false },
-      { native: false, alias: ".gemini/config/AGENTS.md", note: "unconfirmed", verified: false },
+      { native: true, note: "Gemini-lineage discovery: AGENTS.md, CONTEXT.md, GEMINI.md" },
+      { native: false, alias: ".gemini/GEMINI.md" },
     ),
+    // ".agents/skills is the default; .agent/skills is kept for backward
+    // compatibility" — so the canonical path needs no link, and the old path
+    // would be writing to the deprecated one.
     skills: scopes(
-      { native: false, alias: ".agent/skills", note: "unconfirmed", verified: false },
-      { native: false, alias: ".gemini/config/skills", note: "unconfirmed", verified: false },
+      NATIVE,
+      { native: false, alias: ".gemini/config/skills" },
     ),
-    source: "https://github.com/intellectronica/ruler#skills-support-experimental",
+    source: "https://www.antigravity.google/docs/skills/",
   },
   {
     id: "hermes",
     label: "Hermes",
     bins: ["hermes"],
     configRoot: ".hermes",
+    // Context discovery walks to the git root and reads AGENTS.md, plus
+    // HERMES.md, .hermes.md, AGENTS.override.md and CLAUDE.md. No global
+    // instructions file is documented.
     instructions: scopes(
-      { native: true, note: "unconfirmed", verified: false },
-      { native: false, alias: ".hermes/AGENTS.md", note: "unconfirmed" },
+      { native: true, note: "walks to the git root: AGENTS.md, HERMES.md, AGENTS.override.md, CLAUDE.md" },
+      { native: false, note: "no global instructions file documented" },
     ),
+    // "All skills live in ~/.hermes/skills — the primary directory and source of
+    // truth." Nothing documents a project-level skills directory, so that scope
+    // stays unknown rather than linking to a path nothing reads. Hermes also
+    // installs and deletes skills in its own directory, so a link may not last.
     skills: scopes(
-      { native: false, alias: ".hermes/skills", note: "unconfirmed", verified: false },
-      { native: false, alias: ".hermes/skills", note: "unconfirmed", verified: false },
+      { native: false, note: "no project-level skills directory documented" },
+      { native: false, alias: ".hermes/skills", note: "Hermes installs and deletes skills in this directory" },
     ),
-    source: "https://herdr.dev/llms.txt",
+    source: "https://hermes-agent.nousresearch.com/docs/user-guide/features/skills",
   },
 ];
 

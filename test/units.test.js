@@ -24,6 +24,23 @@ test("harness table rows are well formed", () => {
     assert.ok(harness.source?.startsWith("http"), `${harness.id} needs a documentation source`);
     assert.ok(harness.bins.length > 0, `${harness.id} needs a detection binary`);
     assert.ok(harness.configRoot && !harness.configRoot.startsWith("/"), `${harness.id} configRoot is home-relative`);
+    // A note admitting uncertainty must be reflected in the flag. One row
+    // carried note: "unconfirmed" while counting as verified, so doctor stayed
+    // quiet about a speculative path.
+    for (const scope of ["project", "global"]) {
+      for (const group of ["instructions", "skills"]) {
+        const endpoint = harness[group][scope];
+        // Only where we would act on it: an endpoint with no alias writes
+        // nothing, so its note is explanation rather than a claim to check.
+        if (
+          endpoint.alias !== undefined &&
+          endpoint.note &&
+          /unconfirmed|not documented|unresolved|not found in the shipped binary/i.test(endpoint.note)
+        ) {
+          assert.equal(endpoint.verified, false, `${harness.id}.${group}.${scope} admits doubt in its note; set verified: false`);
+        }
+      }
+    }
     if (harness.npmPackage !== undefined) {
       assert.match(harness.npmPackage, /^(@[a-z0-9-]+\/)?[a-z0-9][a-z0-9._-]*$/, `${harness.id} npmPackage looks like a package name`);
     }
