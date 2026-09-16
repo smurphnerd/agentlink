@@ -64,11 +64,11 @@ Where a harness already reads `AGENTS.md` or `.agents/skills/`, agentlink writes
 | Grok CLI | native | native | yes |
 | Qoder CLI | native | native | yes |
 | Antigravity CLI | native | native | yes |
-| Hermes | native | unknown | yes |
+| Hermes | native | native | yes |
 
-"native" means the harness reads `AGENTS.md` or `.agents/skills` itself, so agentlink writes nothing. Nine of the seventeen do, for skills: Codex, Pi, Copilot, Cursor, Kimi, Mastra, Grok, Qoder and Antigravity. `unknown` means no path could be established, which is Kilo Code's skills directory; agentlink links nothing there rather than guessing.
+"native" means the harness reads `AGENTS.md` or `.agents/skills` itself, so agentlink writes nothing. Ten of the seventeen do, for skills: Codex, Pi, Copilot, Cursor, Kimi, Mastra, Grok, Qoder, Antigravity and Hermes. `unknown` means no default path exists to link, which is Kilo Code's skills directory: it takes skills from configuration and plugins, like opencode.
 
-Confirmation is tracked per endpoint per scope, not per harness. Every path is checked either against the vendor's documentation or against the code they ship (`scripts/verify-paths.mjs`). What remains unconfirmed is seven **global instruction files** — Qwen, Kimi, Kilo, Droid, Mastra, Grok and Qoder. Those vendors document a project path and say nothing about a home-directory equivalent, so `doctor` names each one when it is in your selection. They are not errors: a symlink in a path nothing reads is inert, and the cost of being wrong is that one harness does not see your global instructions.
+Confirmation is tracked per endpoint per scope, not per harness. A path is confirmed when the vendor documents it or the shipped code reads it (`scripts/verify-paths.mjs`). Where the code cannot be read — a packed binary often yields almost no path strings — the tool reports no verdict rather than an absence, and the row falls back to documentation.
 
 ## Global scope
 

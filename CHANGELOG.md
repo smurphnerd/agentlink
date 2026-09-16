@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.3
+
+- Hermes reads `.agents/skills` in a project, from
+  `PROJECT_SKILLS_SUBDIRS = (".hermes/skills", ".agents/skills")` in its source.
+  That scope is no longer unknown, and the note records the catch: project
+  skills "load only when the root is in `skills.trusted_project_dirs`", because
+  auto-sourcing skills from any clone is a prompt-injection vector. Its
+  home-directory skills stay an alias on `~/.hermes/skills`.
+- Kimi reads `~/.agents/AGENTS.md` as the cross-tool global instruction file, so
+  that alias is now native and no longer writes a link.
+
+The verifier had two faults of its own, both producing confident nonsense, and
+both fixed: it resolved a platform binary by looking in `dependencies` as well as
+`optionalDependencies`, which sent qwen to a transitive native module and qoder
+to a ripgrep binary; and it drew conclusions from binaries whose strings are not
+recoverable, where GitHub's Copilot CLI yields 5 path-like strings from 143 MB.
+It now scans the main package first and only looks for a platform package when
+the main one is a stub, and it reports no verdict rather than an absence when too
+little evidence comes back.
+
 ## 0.2.2
 
 More rows corrected from vendor documentation, after several people pointed at

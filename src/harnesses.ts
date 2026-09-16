@@ -222,7 +222,10 @@ export const HARNESSES: Harness[] = [
     configRoot: ".kimi-code",
     instructions: scopes(
       { native: true },
-      { native: false, alias: ".kimi-code/AGENTS.md", note: "not documented by Kimi", verified: false },
+      // "Generic cross-tool instructions can still live under ~/.agents/AGENTS.md
+      // in the real OS home." So the canonical file is read and needs no link;
+      // ~/.kimi-code/AGENTS.md is the Kimi-specific alternative.
+      { native: true, note: "~/.agents/AGENTS.md is read as the cross-tool file" },
     ),
     // Documented at both levels under "Skill Locations": project level scans
     // .kimi-code/skills/ and .agents/skills/, user level scans
@@ -357,12 +360,15 @@ export const HARNESSES: Harness[] = [
       { native: true, note: "walks to the git root: AGENTS.md, HERMES.md, AGENTS.override.md, CLAUDE.md" },
       { native: false, note: "no global instructions file documented" },
     ),
-    // "All skills live in ~/.hermes/skills — the primary directory and source of
-    // truth." Nothing documents a project-level skills directory, so that scope
-    // stays unknown rather than linking to a path nothing reads. Hermes also
-    // installs and deletes skills in its own directory, so a link may not last.
+    // agent/skill_utils.py: PROJECT_SKILLS_SUBDIRS = (".hermes/skills",
+    // ".agents/skills"), so the canonical path is read in a project. It is gated
+    // though: project skills "load only when the root is in
+    // skills.trusted_project_dirs", because auto-sourcing skills from any clone
+    // is a prompt-injection vector. At home level only ~/.hermes/skills and the
+    // configured skills.external_dirs are read, so that scope needs the link,
+    // and note that Hermes installs and deletes skills there itself.
     skills: scopes(
-      { native: false, note: "no project-level skills directory documented" },
+      { native: true, note: "read when the project root is in skills.trusted_project_dirs" },
       { native: false, alias: ".hermes/skills", note: "Hermes installs and deletes skills in this directory" },
     ),
     source: "https://hermes-agent.nousresearch.com/docs/user-guide/features/skills",

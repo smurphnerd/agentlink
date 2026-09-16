@@ -129,45 +129,62 @@ function spawn(command, argv) {
 
 /**
  * Most CLIs publish a wrapper that pulls the real binary from a
- * platform-specific package. Following that indirection is the difference
- * between "no evidence" and the actual answer, so resolve it before scanning.
+ * platform-specific package. But only some do: qwen, pi, omp and mastracode ship
+ * their code in the main tarball, and merging `dependencies` into the candidate
+ * list once resolved qwen to a transitive native module instead. So the main
+ * package is scanned first, and a platform package is only fetched when the main
+ * tarball turns out to be a stub.
  */
-function resolvePackage(harness) {
-  const suffix = `${process.platform === "darwin" ? "darwin" : process.platform}-${process.arch}`;
-  const meta = JSON.parse(spawn("npm", ["view", harness.npmPackage, "--json"]));
-  const optional = { ...(meta.optionalDependencies ?? {}), ...(meta.dependencies ?? {}) };
-  const platform = Object.keys(optional).find((name) => name.includes(suffix));
-  if (!platform) return harness.npmPackage;
+function platformPackage(harness, suffix) {
   try {
-    spawn("npm", ["view", platform, "version"]);
-    return platform;
+    const meta = JSON.parse(spawn("npm", ["view", harness.npmPackage, "--json"]));
+    const optional = meta.optionalDependencies ?? {};
+    const candidate = Object.keys(optional).find((name) => name.includes(suffix));
+    if (!candidate) return undefined;
+    spawn("npm", ["view", candidate, "version"]);
+    return candidate;
   } catch {
-    return harness.npmPackage;
+    return undefined;
   }
+}
+
+function fetch(harness, dir, packageName) {
+  const tarball = spawn("npm", ["pack", packageName, "--pack-destination", dir, "--silent"])
+    .trim()
+    .split("\n")
+    .pop();
+  spawn("tar", ["-xzf", path.join(dir, tarball), "-C", dir]);
+  return walk(path.join(dir, "package"));
 }
 
 function verify(harness) {
   const dir = mkdtempSync(path.join(tmpdir(), `verify-${harness.id}-`));
   try {
-    const wanted = resolvePackage(harness);
-    const tarball = spawn("npm", ["pack", wanted, "--pack-destination", dir, "--silent"])
-      .trim()
-      .split("\n")
-      .pop();
-    spawn("tar", ["-xzf", path.join(dir, tarball), "-C", dir]);
+    const suffix = `${process.platform}-${process.arch}`;
+    let wanted = harness.npmPackage;
+    let files = fetch(harness, dir, wanted);
+    let bytes = files.reduce((total, file) => total + (statSync(file).size ?? 0), 0);
 
-    const files = walk(path.join(dir, "package"));
+    if (bytes < 1024 * 1024) {
+      const platform = platformPackage(harness, suffix);
+      if (platform) {
+        rmSync(path.join(dir, "package"), { recursive: true, force: true });
+        wanted = platform;
+        files = fetch(harness, dir, wanted);
+        bytes = files.reduce((total, file) => total + (statSync(file).size ?? 0), 0);
+      }
+    }
     const expected = tablePaths(harness);
     const seen = new Set();
     const counts = new Map();
     const canonical = { agentsMd: false, agentsSkills: false, claudeSkills: false };
     const configTokens = new Set();
-    let bytes = 0;
     let scanned = 0;
+    let printable = 0;
 
     for (const file of files) {
-      bytes += statSync(file).size ?? 0;
       scanned += scanFile(file, (run) => {
+        printable += run.length;
         for (const entry of expected) {
           if (!seen.has(entry.value) && run.includes(entry.value)) seen.add(entry.value);
         }
@@ -201,12 +218,24 @@ function verify(harness) {
 
     // A package that installs a binary contains only a downloader. "ABSENT" in a
     // stub means "not in the stub", not "not in the harness".
+    //
+    // A packed binary is the other false negative: GitHub's Copilot CLI is 143 MB
+    // with almost no recoverable strings, so absence there proves nothing either.
+    // Require at least a little printable text per megabyte before drawing any
+    // conclusion from what is missing.
     const thin = bytes < 1024 * 1024;
+    // How much usable evidence came back. A packed binary can yield megabytes of
+    // short strings and almost no paths, in which case what is missing says
+    // nothing about the harness. GitHub's Copilot CLI is exactly that: 143 MB,
+    // and neither this scan nor grep finds "AGENTS.md" in it.
+    const sparse = counts.size < 20;
     const present = thin ? [] : expected.filter((entry) => seen.has(entry.value));
     const missing = thin ? [] : expected.filter((entry) => !seen.has(entry.value));
 
     return {
       thin,
+      sparse,
+      tokens: counts.size,
       id: harness.id,
       package: wanted,
       configRoot: harness.configRoot,
@@ -285,11 +314,18 @@ if (asJson) {
     }
     console.log(`\n${result.id} (${result.package}) — ${result.files} files scanned, ${result.megabytes} MB`);
     if (result.thin) {
-      console.log(`  thin even after resolution (${result.package}): no evidence either way`);
+      console.log(`  thin, or binary not string-scannable (${result.package}): no evidence either way`);
       console.log("  point --exe at an installed binary to check the real thing");
     } else {
       console.log(`  present  : ${result.present.join(", ") || "NONE"}`);
-      if (result.missing.length) console.log(`  ABSENT   : ${result.missing.join(", ")} (weak: a path built at runtime is never a literal)`);
+      if (result.missing.length && result.sparse) {
+        console.log(
+          `  no verdict: only ${result.tokens} path-like strings recovered from ${result.megabytes} MB.`,
+        );
+        console.log("             a path composed at runtime is never a literal, so absence is not evidence");
+      } else if (result.missing.length) {
+        console.log(`  ABSENT   : ${result.missing.join(", ")}`);
+      }
     }
     console.log(
       `  canonical: ${[
