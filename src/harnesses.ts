@@ -38,6 +38,13 @@ export interface Harness {
   bins: string[];
   /** Config directory relative to $HOME (from `herdr integration status`). */
   configRoot: string;
+  /**
+   * The vendor's own npm package, where one exists. Used to check this table
+   * against the code that actually ships; third-party packages with similar
+   * names are deliberately absent, since inspecting the wrong artifact is how a
+   * wrong path gets into a table.
+   */
+  npmPackage?: string;
   instructions: Record<Scope, Endpoint>;
   skills: Record<Scope, Endpoint>;
   /** Primary documentation these paths were read from. */
@@ -83,6 +90,7 @@ export const HARNESSES: Harness[] = [
     label: "Claude Code",
     bins: ["claude"],
     configRoot: ".claude",
+    npmPackage: "@anthropic-ai/claude-code",
     // Claude Code reads CLAUDE.md, not AGENTS.md, and never scans .agents/skills.
     instructions: scopes(
       { native: false, alias: "CLAUDE.md", note: "Claude Code has no AGENTS.md fallback" },
@@ -99,6 +107,7 @@ export const HARNESSES: Harness[] = [
     label: "OpenAI Codex CLI",
     bins: ["codex"],
     configRoot: ".codex",
+    npmPackage: "@openai/codex",
     // Codex reads AGENTS.md in the repo and ~/.codex/AGENTS.md globally.
     instructions: scopes(
       { native: true },
@@ -113,6 +122,7 @@ export const HARNESSES: Harness[] = [
     label: "Pi",
     bins: ["pi"],
     configRoot: ".pi",
+    npmPackage: "@earendil-works/pi-coding-agent",
     instructions: scopes(
       { native: true },
       { native: false, alias: ".pi/agent/AGENTS.md" },
@@ -126,6 +136,7 @@ export const HARNESSES: Harness[] = [
     label: "Oh My Pi (omp)",
     bins: ["omp"],
     configRoot: ".omp",
+    npmPackage: "@oh-my-pi/pi-coding-agent",
     instructions: scopes(
       { native: true, note: "standalone AGENTS.md via the agents-md provider" },
       { native: false, alias: ".omp/agent/AGENTS.md" },
@@ -142,6 +153,7 @@ export const HARNESSES: Harness[] = [
     label: "GitHub Copilot CLI",
     bins: ["copilot"],
     configRoot: ".copilot",
+    npmPackage: "@github/copilot",
     // Copilot CLI reads AGENTS.md everywhere, but its *user* instructions live
     // in a differently named file.
     instructions: scopes(
@@ -171,12 +183,15 @@ export const HARNESSES: Harness[] = [
     label: "opencode",
     bins: ["opencode"],
     configRoot: ".config/opencode",
+    npmPackage: "opencode-ai",
     instructions: scopes(
       { native: true },
       { native: false, alias: ".config/opencode/AGENTS.md" },
     ),
+    // .opencode/skills confirmed in the shipped binary; the home-directory
+    // equivalent is not a literal anywhere in it.
     skills: scopes(
-      { native: false, alias: ".opencode/skills", verified: false },
+      { native: false, alias: ".opencode/skills" },
       { native: false, alias: ".config/opencode/skills", verified: false },
     ),
     source: "https://opencode.ai/docs/rules/",
@@ -186,6 +201,7 @@ export const HARNESSES: Harness[] = [
     label: "Qwen Code",
     bins: ["qwen"],
     configRoot: ".qwen",
+    npmPackage: "@qwen-code/qwen-code",
     instructions: scopes(
       { native: true, note: "QWEN.md is the legacy name" },
       { native: false, alias: ".qwen/AGENTS.md", note: "not documented by Qwen", verified: false },
@@ -216,14 +232,18 @@ export const HARNESSES: Harness[] = [
     label: "Kilo Code",
     bins: ["kilo"],
     configRoot: ".config/kilo",
+    npmPackage: "@kilocode/cli",
     instructions: scopes(
       { native: true },
       { native: false, alias: ".config/kilo/AGENTS.md", note: "not documented by Kilo" },
     ),
-    // Kilo Code reads Claude Code's skills directory for compatibility.
+    // No skills path survived inspection of the shipped binary: its config
+    // directory holds command/, themes/ and config files, and .claude/skills
+    // (a third-party claim) appears nowhere in 195 MB. Reported as unknown
+    // rather than linked into a directory nothing reads.
     skills: scopes(
-      { native: false, alias: ".claude/skills", note: "shares Claude Code's directory", verified: false },
-      { native: false, alias: ".config/kilo/skills", note: "unconfirmed", verified: false },
+      { native: false, note: "unresolved: not found in the shipped binary" },
+      { native: false, note: "unresolved: not found in the shipped binary" },
     ),
     source: "https://github.com/intellectronica/ruler#skills-support-experimental",
   },
@@ -232,9 +252,10 @@ export const HARNESSES: Harness[] = [
     label: "Factory Droid",
     bins: ["droid"],
     configRoot: ".factory",
+    npmPackage: "@factory/cli",
     instructions: scopes(
       { native: true, note: "AGENTS.md may also live in the home directory" },
-      { native: false, alias: ".factory/AGENTS.md" },
+      { native: false, alias: ".factory/AGENTS.md", note: "not found in the shipped binary", verified: false },
     ),
     skills: scopes(
       { native: false, alias: ".factory/skills" },
@@ -262,6 +283,7 @@ export const HARNESSES: Harness[] = [
     label: "Mastra Code",
     bins: ["mastracode"],
     configRoot: ".mastracode",
+    npmPackage: "mastracode",
     instructions: scopes(
       { native: true },
       { native: false, alias: ".mastracode/AGENTS.md", note: "not documented by Mastra", verified: false },
@@ -280,10 +302,9 @@ export const HARNESSES: Harness[] = [
       { native: true, note: "reads AGENTS.md, CLAUDE.md, AGENT.md" },
       { native: false, alias: ".grok/AGENTS.md", note: "not documented by Grok", verified: false },
     ),
-    skills: scopes(
-      { native: false, alias: ".grok/skills" },
-      { native: false, alias: ".grok/skills" },
-    ),
+    // The binary's embedded documentation: "Grok also scans `.agents/skills/`
+    // (and `commands/`) at each tier (alongside `.grok/`)".
+    skills: scopes(NATIVE, NATIVE),
     source: "https://docs.x.ai/docs/grok-cli/skills",
   },
   {
@@ -291,14 +312,14 @@ export const HARNESSES: Harness[] = [
     label: "Qoder CLI",
     bins: ["qodercli", "qoder"],
     configRoot: ".qoder",
+    npmPackage: "@qoder-ai/qodercli",
     instructions: scopes(
       { native: true, note: "configurable via context.fileName" },
       { native: false, alias: ".qoder/AGENTS.md", note: "not documented by Qoder", verified: false },
     ),
-    skills: scopes(
-      { native: false, alias: ".qoder/skills" },
-      { native: false, alias: ".qoder/skills" },
-    ),
+    // Confirmed in the shipped bundle: .agents/skills is present, .qoder/skills
+    // is not. Its own config directory holds settings and repowiki, not skills.
+    skills: scopes(NATIVE, NATIVE),
     source: "https://docs.qoder.com/cli/Skills",
   },
   {

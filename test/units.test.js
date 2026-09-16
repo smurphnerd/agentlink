@@ -23,6 +23,9 @@ test("harness table rows are well formed", () => {
     assert.ok(harness.source?.startsWith("http"), `${harness.id} needs a documentation source`);
     assert.ok(harness.bins.length > 0, `${harness.id} needs a detection binary`);
     assert.ok(harness.configRoot && !harness.configRoot.startsWith("/"), `${harness.id} configRoot is home-relative`);
+    if (harness.npmPackage !== undefined) {
+      assert.match(harness.npmPackage, /^(@[a-z0-9-]+\/)?[a-z0-9][a-z0-9._-]*$/, `${harness.id} npmPackage looks like a package name`);
+    }
 
     for (const scope of ["project", "global"]) {
       for (const group of ["instructions", "skills"]) {

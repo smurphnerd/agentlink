@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0
+
+Corrects the path table against the code each harness actually ships, checked
+with `scripts/verify-paths.mjs`. Paths now come from evidence rather than from
+documentation that may describe an older layout.
+
+- Qoder and Grok read `.agents/skills` themselves, so they need no link. Both
+  were aliases; Qoder's own directory holds settings and repowiki, not skills,
+  and Grok's binary states that it scans `.agents/skills/` at every tier.
+- opencode's `.opencode/skills` is confirmed in its shipped binary.
+- Kilo Code's skills path is now reported as unknown. `.claude/skills` came from
+  a third-party table and appears nowhere in its 195 MB binary, so agentlink
+  stopped writing links there rather than guessing.
+- Factory Droid's home-directory instructions file has no evidence behind it and
+  is flagged unverified, though both of its skills paths are confirmed.
+- Claude Code, Codex, Pi, Copilot, Qwen and Mastra Code rows were confirmed as
+  they stood.
+
 ## 0.1.2
 
 - `list` explains what `unverified` means: the vendor's docs do not confirm that

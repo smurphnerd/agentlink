@@ -56,11 +56,18 @@ test("skills are linked one symlink per skill per harness", () => {
 
 test("two harnesses sharing a directory produce one link", () => {
   const { paths } = repo({ demo: "---\nname: demo\ndescription: x\n---\n" });
-  // Claude Code and Kilo Code both read .claude/skills.
-  const linkPlan = plan(paths, [harness("claude"), harness("kilo")]);
+  // No two real harnesses share a skills directory today, so this is stated
+  // explicitly rather than borrowed from whatever the table currently says.
+  const sharesClaude = (id) => ({
+    ...harness("claude"),
+    id,
+    label: id,
+    skills: { project: { native: false, alias: ".claude/skills" }, global: { native: true } },
+  });
+  const linkPlan = plan(paths, [sharesClaude("one"), sharesClaude("two")]);
   const shared = linkPlan.ops.filter((op) => op.rel === ".claude/skills/demo");
-  assert.equal(shared.length, 1);
-  assert.deepEqual(shared[0].harnessIds.sort(), ["claude", "kilo"]);
+  assert.equal(shared.length, 1, "one link, not one per harness");
+  assert.deepEqual(shared[0].harnessIds.sort(), ["one", "two"]);
 });
 
 test("instructions links are skipped when AGENTS.md is missing", () => {

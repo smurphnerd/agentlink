@@ -1,6 +1,6 @@
 {
   "name": "@thesmurph/agentlink",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "One source of truth for agent instructions and skills, symlinked into every coding-agent harness.",
   "keywords": [
     "agents.md",
