@@ -14,13 +14,20 @@ import { resolveScope, type Scope, type ScopePaths } from "./scope.js";
 import { selectMany, type Choice } from "./ui.js";
 
 const ESC = String.fromCharCode(27);
-const BOLD = `${ESC}[1m`;
-const DIM = `${ESC}[2m`;
-const RED = `${ESC}[31m`;
-const GREEN = `${ESC}[32m`;
-const YELLOW = `${ESC}[33m`;
-const CYAN = `${ESC}[36m`;
-const RESET = `${ESC}[0m`;
+// Colour only when something is reading it: a TTY, and not opted out. Piped
+// output and CI logs stay free of escape codes.
+const useColor =
+  process.env.NO_COLOR === undefined &&
+  process.env.FORCE_COLOR !== "0" &&
+  (process.env.FORCE_COLOR !== undefined || process.stdout.isTTY === true);
+const paint = (code: string): string => (useColor ? `${ESC}[${code}m` : "");
+const BOLD = paint("1");
+const DIM = paint("2");
+const RED = paint("31");
+const GREEN = paint("32");
+const YELLOW = paint("33");
+const CYAN = paint("36");
+const RESET = paint("0");;
 
 interface Options {
   command: string;
@@ -298,6 +305,11 @@ async function syncLinks(
           pruned,
           native: linkPlan.native,
           unknown: linkPlan.unknown,
+          selection: {
+            harnesses: chosen.map((h) => h.id),
+            added: chosen.map((h) => h.id).filter((id) => !previous.harnesses.includes(id)),
+            removed: previous.harnesses.filter((id) => !chosen.some((h) => h.id === id)),
+          },
           aliases: linkPlan.aliases,
           skills: linkPlan.skillsFound,
           conflicts: conflicts.map((fix) => fix.target),
@@ -320,6 +332,11 @@ async function syncLinks(
   process.stdout.write(
     `\n${BOLD}agentlink${RESET} ${DIM}${where} · ${chosen.length} harness${chosen.length === 1 ? "" : "es"}${options.dryRun ? " · dry run" : ""}${RESET}\n`,
   );
+
+  // An explicit --harnesses/--all/--detected changes the saved selection, so
+  // say which harnesses that added or dropped rather than letting it pass.
+  const selection = selectionChange(previous.harnesses, chosen);
+  if (selection) step("select", selection);
 
   for (const result of results) {
     const symbol =
@@ -432,7 +449,9 @@ async function runList(paths: ScopePaths, options: Options): Promise<void> {
   }
   process.stdout.write(
     `\n  ${GREEN}✓${RESET} linked   ${DIM}·${RESET} not linked   ${DIM}change with \`agentlink select\`${RESET}\n` +
-      `  ${DIM}native = harness reads AGENTS.md / .agents/skills itself; list --json prints the source URL for every row${RESET}\n`,
+      `  ${DIM}native = harness reads AGENTS.md / .agents/skills itself${RESET}\n` +
+      `  ${YELLOW}unverified${RESET} ${DIM}= the vendor's docs do not confirm that path, so the link may sit where nothing reads it.${RESET}\n` +
+      `  ${DIM}It is not an error. \`list --json\` prints the source URL for every endpoint.${RESET}\n`,
   );
 }
 
@@ -615,6 +634,19 @@ function dedupe(harnesses: Harness[]): Harness[] {
 
 function step(verb: string, message: string): void {
   process.stdout.write(`  ${GREEN}✓${RESET} ${DIM}${verb.padEnd(7)}${RESET}${message}\n`);
+}
+
+/** Describe a change to the saved selection, or null when nothing changed. */
+function selectionChange(before: string[], chosen: Harness[]): string | null {
+  const after = chosen.map((harness) => harness.id);
+  const added = after.filter((id) => !before.includes(id));
+  const removed = before.filter((id) => !after.includes(id));
+  if (added.length === 0 && removed.length === 0) return null;
+  // The first run has nothing to compare against; the list above already says it.
+  const parts = [added.length ? `+${added.join(" ")}` : "", removed.length ? `-${removed.join(" ")}` : ""];
+  return `${after.length} harness${after.length === 1 ? "" : "es"}${
+    before.length ? ` (was ${before.length})` : ""
+  }: ${parts.filter(Boolean).join(" ")}`;
 }
 
 function version(): void {

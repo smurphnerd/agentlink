@@ -260,3 +260,29 @@ test("list shows what is linked, not merely what is installed", () => {
   assert.match(run(["list"], root).out, /1 linked/);
   rmSync(root, { recursive: true, force: true });
 });
+
+test("a run that changes the saved selection says so", () => {
+  const root = repo({ demo: skill("demo") });
+  run(["init", "--harnesses", "claude,cursor", "--yes"], root);
+
+  const dropped = run(["sync", "--harnesses", "claude", "--yes"], root);
+  assert.match(dropped.out, /select\s+1 harness \(was 2\): -cursor/, "the drop is named");
+  assert.match(dropped.out, /removed \(no longer wanted\)/, "and the link is pruned");
+
+  const restored = run(["sync", "--harnesses", "claude,cursor", "--yes"], root);
+  assert.match(restored.out, /\+cursor/, "re-adding is named too");
+
+  const json = JSON.parse(run(["sync", "--harnesses", "claude", "--yes", "--json"], root).out);
+  assert.deepEqual(json.selection.removed, ["cursor"]);
+  assert.deepEqual(json.selection.harnesses, ["claude"]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("list explains the unverified marker", () => {
+  const root = repo({ demo: skill("demo") });
+  const { out } = run(["list"], root);
+  assert.match(out, /unverified.*vendor's docs do not confirm/i);
+  assert.match(out, /not an error/i);
+  assert.match(out, /linked.*not linked/);
+  rmSync(root, { recursive: true, force: true });
+});
