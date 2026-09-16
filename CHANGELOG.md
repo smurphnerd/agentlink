@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+- `list` explains what `unverified` means: the vendor's docs do not confirm that
+  path, so the link may sit where nothing reads it. It is not an error.
+- An explicit `--harnesses`, `--all` or `--detected` sets the saved selection, so
+  sync now reports what it added or dropped instead of changing it quietly.
+  `sync --json` gains `selection.added` and `selection.removed`.
+- Colour is written only to a TTY, and `NO_COLOR` is honoured, so piped output
+  and CI logs contain no escape codes.
+
 ## 0.1.1
 
 - `list` shows what is linked rather than only what is installed. A `✓` means
@@ -8,11 +18,6 @@
   `selected` and a top-level `linked` array.
 - Fixed: `list` printed one mark for two different facts, so a deselected
   harness looked selected. The selection itself was always saved correctly.
-- `list` explains what `unverified` means: the vendor's docs do not confirm that
-  path, so the link may sit where nothing reads it. It is not an error.
-- An explicit `--harnesses`, `--all` or `--detected` sets the saved selection, so
-  sync now reports what it added or dropped instead of changing it quietly.
-  `sync --json` gains `selection.added` and `selection.removed`.
 
 ## 0.1.0
 
