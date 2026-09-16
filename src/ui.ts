@@ -4,7 +4,7 @@ import { emitKeypressEvents } from "node:readline";
  * A dependency-free checkbox list.
  *
  * Uses raw mode plus ANSI line control rather than a TUI library: the whole
- * point of agentlink is that `npx agentlink` works with nothing installed.
+ * point of agentlink is that it works with nothing installed.
  * Falls back to the caller's defaults when stdin is not a TTY.
  */
 

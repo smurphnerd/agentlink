@@ -53,7 +53,7 @@ file next to one — edit or create the source it points to.
   `SKILL.md` needs frontmatter with `name` and a `description` that states what
   the skill does *and* when to use it. Keep scripts and references inside the
   skill directory and link them with relative paths.
-- **After adding, renaming, or moving a skill or doc**, run `npx agentlink sync`
+- **After adding, renaming, or moving a skill or doc**, run `agentlink sync`
   so every harness picks up the change.
 <!-- agentlink:end -->
 ```
@@ -82,7 +82,7 @@ EOF
 # paste the block above into AGENTS.md
 ```
 
-Then run `npx agentlink sync` to create the remaining links and `npx agentlink doctor` to check the result. `doctor` exits non-zero when it finds an error, which makes it usable as a CI check on a repository that has adopted the convention.
+Then run `agentlink sync` to create the remaining links and `agentlink doctor` to check the result. `doctor` exits non-zero when it finds an error, which makes it usable as a CI check on a repository that has adopted the convention.
 
 ## Related
 

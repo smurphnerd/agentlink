@@ -27,7 +27,7 @@ file next to one — edit or create the source it points to.
   \`SKILL.md\` needs frontmatter with \`name\` and a \`description\` that states what
   the skill does *and* when to use it. Keep scripts and references inside the
   skill directory and link them with relative paths.
-- **After adding, renaming, or moving a skill or doc**, run \`npx agentlink sync\`
+- **After adding, renaming, or moving a skill or doc**, run \`agentlink sync\`
   so every harness picks up the change.
 ${END_MARKER}`;
 
@@ -47,7 +47,7 @@ everywhere: how you like work done, what to ask before doing, personal tooling.
 - **Naming**: skill directory and frontmatter \`name\` are the same
   lowercase-hyphenated string, 1-64 characters.
 - **After adding, renaming, or moving a personal skill**, run
-  \`npx agentlink sync --global\`.
+  \`agentlink sync --global\`.
 ${END_MARKER}`;
 
 /**

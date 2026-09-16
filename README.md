@@ -13,7 +13,7 @@ Everything any harness reads is a symlink to one of those.
 
 ```bash
 cd your-project
-npx agentlink init
+npx @thesmurph/agentlink init
 ```
 
 `init` prints a checklist of all 17 known harnesses, with the ones installed on your machine already ticked. Confirm, and it creates `AGENTS.md` and `.agents/skills/`, appends a clause that tells future agents how the convention works, and symlinks each selected harness at the canonical files. The selection is saved in `.agents/agentlink.json`, so later runs need no input.
@@ -21,7 +21,7 @@ npx agentlink init
 After you add or move a skill:
 
 ```bash
-npx agentlink sync
+npx @thesmurph/agentlink sync
 ```
 
 ## Commands
@@ -104,7 +104,7 @@ One caveat about committing the aliases. Git checks symlinks out as plain text f
 `doctor` exits non-zero when it finds a problem, so a repository that has adopted the convention can check itself:
 
 ```yaml
-- run: npx agentlink doctor
+- run: npx @thesmurph/agentlink doctor
 ```
 
 The selection comes from `.agents/agentlink.json`, which is committed, so this works on a runner with no harnesses installed. `doctor --harnesses a,b` checks a declared set without depending on that file. With no selection and nothing installed there is nothing to check, and `doctor` says so instead of reporting a pass.
@@ -149,10 +149,10 @@ Zero runtime dependencies. `npm run build` runs `tsc` into `dist/`.
 The first release needs your npm credentials:
 
 ```bash
-npm publish --otp=<code from your authenticator>
+npm publish --access public --otp=<code from your authenticator>
 ```
 
-Publishing is a 2FA-gated action, and the token `npm login` writes by default does not bypass 2FA. A granular access token with "Bypass 2FA" enabled also works, if you would rather not type a code.
+The name is scoped (`agentlink` is too similar to the existing, empty `agent-link`, which npm's typosquat check rejects), so publishing needs `--access public`. Publishing is also 2FA-gated, and the token `npm login` writes by default does not bypass 2FA. A granular access token with "Bypass 2FA" enabled also works, if you would rather not type a code.
 
 After that, releases go through `.github/workflows/publish.yml` on a version tag, using trusted publishing so there is no token to rotate and provenance is attached automatically:
 
