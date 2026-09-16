@@ -144,6 +144,24 @@ src/ui.ts          the checkbox picker, no dependencies
 
 Zero runtime dependencies. `npm run build` runs `tsc` into `dist/`.
 
+## Publishing
+
+The first release needs your npm credentials:
+
+```bash
+npm publish --otp=<code from your authenticator>
+```
+
+Publishing is a 2FA-gated action, and the token `npm login` writes by default does not bypass 2FA. A granular access token with "Bypass 2FA" enabled also works, if you would rather not type a code.
+
+After that, releases go through `.github/workflows/publish.yml` on a version tag, using trusted publishing so there is no token to rotate and provenance is attached automatically:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Configure it once on npmjs.com: package settings, Trusted publishing, GitHub Actions, with the workflow filename `publish.yml`.
+
 ## Tests
 
 ```bash

@@ -1,0 +1,36 @@
+name: Publish
+
+# Trusted publishing: no long-lived token. npm exchanges the GitHub OIDC token
+# for a short-lived one and attaches provenance automatically.
+#
+# One-time setup on npmjs.com after the package exists:
+#   Package settings -> Trusted publishing -> GitHub Actions
+#     Organization or user: smurphnerd
+#     Repository:           agentlink
+#     Workflow filename:    publish.yml
+#     Allowed actions:      npm publish
+# Then: git tag v0.1.0 && git push origin v0.1.0
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm publish
