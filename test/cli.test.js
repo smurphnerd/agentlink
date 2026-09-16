@@ -242,3 +242,21 @@ test("sync before init explains itself instead of failing", () => {
   assert.match(out, /AGENTS\.md does not exist|agentlink init/);
   rmSync(root, { recursive: true, force: true });
 });
+
+test("list shows what is linked, not merely what is installed", () => {
+  const root = repo({ demo: skill("demo") });
+  run(["init", "--harnesses", "claude,cursor", "--yes"], root);
+
+  const before = JSON.parse(run(["list", "--json"], root).out);
+  assert.deepEqual(before.linked.sort(), ["claude", "cursor"]);
+  assert.equal(before.harnesses.find((h) => h.id === "claude").selected, true);
+
+  // Deselecting has to be visible, and has to be reflected in the header count.
+  run(["sync", "--harnesses", "claude", "--yes"], root);
+  const after = JSON.parse(run(["list", "--json"], root).out);
+  assert.deepEqual(after.linked, ["claude"]);
+  assert.equal(after.harnesses.find((h) => h.id === "cursor").selected, false);
+  assert.equal(typeof after.harnesses.find((h) => h.id === "cursor").installed, "boolean");
+  assert.match(run(["list"], root).out, /1 linked/);
+  rmSync(root, { recursive: true, force: true });
+});

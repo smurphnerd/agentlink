@@ -32,7 +32,7 @@ agentlink init           create AGENTS.md + .agents/skills, migrate, link
 agentlink sync           re-link after adding or moving a skill
 agentlink fix            fold stray real copies into .agents, then link
 agentlink select         change which harnesses are linked
-agentlink list           every harness, where it reads from, whether it is installed
+agentlink list           what is linked, where each harness reads from, what is installed
 agentlink doctor         drift, duplicates, invalid skills, broken links
 agentlink adopt          move an existing CLAUDE.md or GEMINI.md into AGENTS.md
 agentlink unlink         remove the links agentlink created

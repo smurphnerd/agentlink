@@ -388,9 +388,12 @@ async function syncLinks(
 }
 
 async function runList(paths: ScopePaths, options: Options): Promise<void> {
+  const state = readState(paths);
+  const selected = new Set(state.harnesses);
   const rows = detectAll().map(({ harness, installed, reasons }) => ({
     id: harness.id,
     label: harness.label,
+    selected: selected.has(harness.id),
     installed,
     reasons,
     instructions: describe(harness.instructions[paths.scope]),
@@ -401,25 +404,35 @@ async function runList(paths: ScopePaths, options: Options): Promise<void> {
   }));
 
   if (options.json) {
-    process.stdout.write(`${JSON.stringify({ scope: paths.scope, harnesses: rows }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ scope: paths.scope, root: paths.root, linked: [...selected], harnesses: rows }, null, 2)}\n`,
+    );
     return;
   }
 
   const width = Math.max(...rows.map((row) => row.label.length));
+  const installedCount = rows.filter((row) => row.installed).length;
   process.stdout.write(
-    `\n${BOLD}harnesses${RESET} ${DIM}· scope: ${paths.scope}${RESET}\n\n`,
+    `\n${BOLD}harnesses${RESET} ${DIM}· scope: ${paths.scope} · ${selected.size} linked · ${installedCount} installed here${RESET}\n\n`,
   );
   for (const row of rows) {
-    const mark = row.installed ? `${GREEN}●${RESET}` : `${DIM}○${RESET}`;
-    const flag =
-      !row.instructionsVerified || !row.skillsVerified ? ` ${YELLOW}unverified${RESET}` : "";
+    // The leading mark is the tool's own state: what is actually linked.
+    // Availability is only called out when it is surprising.
+    const mark = row.selected ? `${GREEN}✓${RESET}` : `${DIM}·${RESET}`;
+    const note =
+      row.selected && !row.installed
+        ? `  ${YELLOW}selected, not installed${RESET}`
+        : !row.selected && row.installed
+          ? `  ${DIM}installed, not linked${RESET}`
+          : "";
+    const flag = !row.instructionsVerified || !row.skillsVerified ? ` ${YELLOW}unverified${RESET}` : "";
     process.stdout.write(
-      `  ${mark} ${row.label.padEnd(width)}  ${DIM}instructions${RESET} ${row.instructions}  ${DIM}skills${RESET} ${row.skills}${flag}\n`,
+      `  ${mark} ${row.label.padEnd(width)}  ${DIM}instructions${RESET} ${row.instructions}  ${DIM}skills${RESET} ${row.skills}${flag}${note}\n`,
     );
   }
   process.stdout.write(
-    `\n  ${GREEN}●${RESET} present on this machine   ${DIM}native = harness reads AGENTS.md / .agents/skills itself${RESET}\n` +
-      `  ${DIM}agentlink list --json prints the source URL for every row${RESET}\n`,
+    `\n  ${GREEN}✓${RESET} linked   ${DIM}·${RESET} not linked   ${DIM}change with \`agentlink select\`${RESET}\n` +
+      `  ${DIM}native = harness reads AGENTS.md / .agents/skills itself; list --json prints the source URL for every row${RESET}\n`,
   );
 }
 

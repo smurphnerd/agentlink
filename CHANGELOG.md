@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- `list` shows what is linked rather than only what is installed. A `✓` means
+  agentlink is linking that harness; a trailing note appears when a harness is
+  installed but not linked, or linked but not installed. `list --json` gains
+  `selected` and a top-level `linked` array.
+- Fixed: `list` printed one mark for two different facts, so a deselected
+  harness looked selected. The selection itself was always saved correctly.
+
 ## 0.1.0
 
 First release.
