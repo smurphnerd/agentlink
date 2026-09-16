@@ -125,7 +125,9 @@ Every command takes `--dry-run`.
 
 ## Limits worth knowing
 
-Claude Code has open reports of symlinked skill directories working but not appearing in `/skills`. The link is real and the content is reachable; the listing may miss it. If that turns out to matter, `agentlink unlink` restores the previous state and you can copy the skill directory instead.
+Symlinked skill directories work in Claude Code. Checked against 2.1.273 by asking it which skills it had: a symlinked `~/.claude/skills/web-perf` was offered by name. Two related behaviours are worth knowing, both visible in that binary. The sandboxed loader that reads skills from a mounted team or cloud directory rejects a folder that is a symlink ("unsafe or symlinked skill folder"), so a cloud session may not see them. And the onboarding importer, which copies another tool's skills into `.claude/skills`, skips a project-scope source that is a symlink, so it will not re-import what agentlink already linked.
+
+A skill is hidden from the model when its frontmatter sets `disable-model-invocation: true`. That is the skill's own choice, not a fault, and `doctor` does not flag it.
 
 Harnesses that read `.agents/skills/` natively get no link at all, which means there is nothing for agentlink to repair if the harness changes its mind. `doctor` re-checks the table against what is selected, not against the vendor's current docs.
 

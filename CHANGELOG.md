@@ -11,6 +11,11 @@
 - Kimi reads `~/.agents/AGENTS.md` as the cross-tool global instruction file, so
   that alias is now native and no longer writes a link.
 
+The README's warning about Claude Code and symlinked skills was too pessimistic
+and is replaced with what was measured: a symlinked `~/.claude/skills/web-perf`
+is offered to the model, while the sandboxed mount loader and the onboarding
+importer both decline symlinked sources for their own reasons.
+
 The verifier had two faults of its own, both producing confident nonsense, and
 both fixed: it resolved a platform binary by looking in `dependencies` as well as
 `optionalDependencies`, which sent qwen to a transitive native module and qoder
